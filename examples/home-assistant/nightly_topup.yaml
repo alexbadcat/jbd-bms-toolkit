@@ -1,0 +1,123 @@
+# Nightly top-up — slow charge to 100% a few mornings a week
+#
+# Required entities:
+#   number.inverter_max_charging_current  - inverter's battery charge current limit (A)
+#   number.inverter_program_1_soc         - inverter charge-schedule SOC target #1
+#   number.inverter_program_5_soc         - inverter charge-schedule SOC target #5;
+#                                            == 100 means the inverter is already
+#                                            configured to always hold near full
+#                                            (an "emergency"/backup mode) — this
+#                                            automation then does nothing, since
+#                                            there is nothing to "top up" to
+#   binary_sensor.inverter_generator      - "on" while a backup generator is running
+#
+# Why this exists: a BMS's "SOC = 100%" reset condition (per most JBD-style BMS
+# firmware) is roughly "pack-average cell voltage stays above a configured
+# threshold for several seconds" — see the toolkit's main README for the
+# calibration story behind that number. Two parallel packs with slightly
+# different internal resistance reach that average at different times, so
+# without a deliberate slow top-up their fuel gauges silently drift apart.
+# A once-every-few-days, low-current charge to 100% (slow enough that the
+# last few percent isn't rushed, letting both packs actually reach the reset
+# condition) keeps them in sync without living at a high voltage daily.
+alias: "Nightly top-up to 100%"
+description: >-
+  On alternating mornings, sets a low charge current and a 100% SOC target for
+  a few hours before sunrise, then relaxes the target back down and restores
+  the normal charge current. A 10-minute heartbeat outside the window makes
+  this self-healing if Home Assistant restarts mid-window or misses the stop
+  trigger. Co-operates with cell_voltage_guard.yaml: if that automation has
+  already pulled the current down to protect a hot cell, this one leaves it
+  alone instead of overriding it back up.
+mode: single
+
+triggers:
+  - trigger: time
+    at: "03:00:00"
+    id: start
+  - trigger: time
+    at: "06:58:00"
+    id: stop
+  - trigger: time_pattern
+    minutes: "/10"
+    id: beat
+
+conditions: []
+
+actions:
+  - choose:
+      # Start the top-up — alternate mornings only (here: Tue/Thu/Sat, i.e.
+      # Python weekday() 1/3/5 — adjust to taste), and only if not already in
+      # an "always full" backup mode where a scheduled top-up is pointless
+      - conditions:
+          - condition: trigger
+            id: start
+          - condition: template
+            value_template: "{{ now().weekday() in [1, 3, 5] }}"
+          - condition: template
+            value_template: "{{ states('number.inverter_program_5_soc') | int(0) != 100 }}"
+          - condition: state
+            entity_id: binary_sensor.inverter_generator
+            state: "off"
+        sequence:
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 15 }
+          - delay: { seconds: 4 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_program_1_soc }
+            data: { value: 100 }
+
+      # Stop — relax the SOC target back down. The current is only restored
+      # if it's still at our own marker value (15 A); if cell_voltage_guard
+      # has since pulled it lower to protect a cell, leave that alone.
+      - conditions:
+          - condition: trigger
+            id: stop
+          - condition: template
+            value_template: "{{ states('number.inverter_program_5_soc') | int(0) != 100 }}"
+        sequence:
+          - action: number.set_value
+            target: { entity_id: number.inverter_program_1_soc }
+            data: { value: 90 }
+          - delay: { seconds: 4 }
+          # Inline guard condition: if this is false, the rest of the
+          # sequence simply stops here (not an error, just a no-op).
+          - condition: template
+            value_template: "{{ states('number.inverter_max_charging_current') | int(0) == 15 }}"
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 70 }
+
+      # Heartbeat — outside the top-up window, clean up anything left at our
+      # marker values (covers an HA restart that swallowed the stop trigger)
+      - conditions:
+          - condition: trigger
+            id: beat
+          - condition: time
+            after: "06:58:30"
+            before: "03:00:00"
+          - condition: template
+            value_template: >-
+              {{ states('number.inverter_max_charging_current') | int(0) == 15 or
+                 (states('number.inverter_program_1_soc') | int(0) == 100 and
+                  states('number.inverter_program_5_soc') | int(0) != 100) }}
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ states('number.inverter_max_charging_current') | int(0) == 15 }}"
+            then:
+              - action: number.set_value
+                target: { entity_id: number.inverter_max_charging_current }
+                data:
+                  value: "{{ 80 if states('number.inverter_program_5_soc') | int(0) == 100 else 70 }}"
+              - delay: { seconds: 4 }
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ states('number.inverter_program_1_soc') | int(0) == 100 and
+                     states('number.inverter_program_5_soc') | int(0) != 100 }}
+            then:
+              - action: number.set_value
+                target: { entity_id: number.inverter_program_1_soc }
+                data: { value: 90 }

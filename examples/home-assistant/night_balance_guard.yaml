@@ -1,0 +1,133 @@
+# Night balance guard — auto-start a balance cycle overnight if the packs
+# have drifted apart
+#
+# Required entities:
+#   input_select.ess_mode               - must include "Auto", "Eco" and
+#                                          "Balance" options (see helpers.yaml)
+#   input_text.ess_mode_before_balance  - stores the mode to restore afterwards
+#   binary_sensor.inverter_grid         - "on" while grid power is present
+#   binary_sensor.inverter_generator    - "on" while a backup generator is running
+#   sensor.bms_a_top_spread_last, sensor.bms_b_top_spread_last
+#       - "top spread" (max-min cell delta, mV) from the last completed session
+#         on the pack's top knee (jbd2mqtt's top_spread tracker — the spread is
+#         only meaningful near full charge; on the flat part of a LiFePO4
+#         curve it's mostly sensor noise, not real imbalance)
+#   sensor.bms_a_top_spread_now, sensor.bms_b_top_spread_now
+#       - live top-spread value, used only for the morning summary notification
+#   notify.notify                       - replace with your own notify service
+#
+# Why this exists: rather than balancing on a fixed schedule, this watches
+# the actual measured imbalance and only spends a night cycling the charger
+# when the packs have genuinely drifted apart (or the data looks stale/
+# missing, in which case it balances defensively).
+alias: "Night balance guard"
+description: >-
+  Once a night, if the ESS is in "Auto" or "Eco" and the top-of-charge spread
+  on either pack is at or above 40 mV (or last session's data is missing or
+  stale), switches the ESS to "Balance" mode (see balance_hold.yaml) for the
+  rest of the night and restores the previous mode in the morning. Both the
+  start and the end are backed by a 15-minute heartbeat window so a restart of
+  Home Assistant exactly at the trigger time doesn't skip a night.
+mode: single
+
+triggers:
+  - trigger: time
+    at: "01:00:00"
+    id: start
+  - trigger: time
+    at: "06:58:00"
+    id: end
+  - trigger: time_pattern
+    minutes: "/15"
+    id: beat
+
+conditions: []
+
+actions:
+  - choose:
+      - alias: "start a balance cycle overnight, if needed"
+        conditions:
+          - condition: or
+            conditions:
+              - condition: trigger
+                id: start
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: beat
+                  - condition: time
+                    after: "01:00:00"
+                    before: "02:00:00"
+          - condition: state
+            entity_id: input_select.ess_mode
+            state:
+              - "Eco"
+              - "Auto"
+          - condition: template
+            value_template: "{{ states('input_text.ess_mode_before_balance') | trim == '' }}"
+          - condition: state
+            entity_id: binary_sensor.inverter_grid
+            state: "on"
+          - condition: state
+            entity_id: binary_sensor.inverter_generator
+            state: "off"
+          - condition: template
+            value_template: >-
+              {{ (states('sensor.bms_a_top_spread_last') | float(-1) >= 40) or
+                 (states('sensor.bms_b_top_spread_last') | float(-1) >= 40) or
+                 (states('sensor.bms_a_top_spread_last') in ['unknown', 'unavailable']) or
+                 (states('sensor.bms_b_top_spread_last') in ['unknown', 'unavailable']) or
+                 ((now() - (state_attr('sensor.bms_a_top_spread_last', 'at') | as_datetime)).days >= 7
+                   if state_attr('sensor.bms_a_top_spread_last', 'at') else false) or
+                 ((now() - (state_attr('sensor.bms_b_top_spread_last', 'at') | as_datetime)).days >= 7
+                   if state_attr('sensor.bms_b_top_spread_last', 'at') else false) }}
+        sequence:
+          - action: input_text.set_value
+            target: { entity_id: input_text.ess_mode_before_balance }
+            data:
+              value: "{{ states('input_select.ess_mode') }}"
+          - action: input_select.select_option
+            target: { entity_id: input_select.ess_mode }
+            data:
+              option: "Balance"
+          - action: notify.notify
+            data:
+              title: "ESS: night balance"
+              message: >-
+                Top spread: pack A {{ states('sensor.bms_a_top_spread_last') }} mV,
+                pack B {{ states('sensor.bms_b_top_spread_last') }} mV. Switching
+                to "Balance" (was "{{ states('input_text.ess_mode_before_balance') }}").
+
+      - alias: "restore mode in the morning"
+        conditions:
+          - condition: or
+            conditions:
+              - condition: trigger
+                id: end
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: beat
+                  - condition: time
+                    after: "06:58:00"
+                    before: "07:58:00"
+          - condition: template
+            value_template: "{{ states('input_text.ess_mode_before_balance') | trim != '' }}"
+        sequence:
+          - action: notify.notify
+            data:
+              title: "ESS: night balance — summary"
+              message: >-
+                Top spread now: pack A {{ states('sensor.bms_a_top_spread_now') }}
+                / last session {{ states('sensor.bms_a_top_spread_last') }} mV;
+                pack B {{ states('sensor.bms_b_top_spread_now') }} / last session
+                {{ states('sensor.bms_b_top_spread_last') }} mV. Restoring mode
+                "{{ states('input_text.ess_mode_before_balance') }}".
+          - action: input_select.select_option
+            target: { entity_id: input_select.ess_mode }
+            data:
+              option: "{{ states('input_text.ess_mode_before_balance') }}"
+          - action: input_text.set_value
+            target: { entity_id: input_text.ess_mode_before_balance }
+            data:
+              value: ""

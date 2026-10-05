@@ -1,0 +1,33 @@
+%YAML 1.1
+---
+# ser2net 4.3 config: serial-over-IP tunnel for the USB-RS485 adapter (JBD BMS).
+# /dev/ttyUSB0 (FTDI, 9600 8N1) -> TCP raw 0.0.0.0:4001
+#
+# Навіщо: даєш доступ до тієї самої BMS іншому хосту по мережі (напр. рідному
+# вендорському GUI на Windows-VM через com0com+com2tcp), поки основний демон
+# (jbd2mqtt) не працює з портом напряму.
+#
+# ⚠️ НЕ запускати одночасно з jbd2mqtt / ручним записом у BMS — лише ОДИН
+# процес може тримати /dev/ttyUSB0.
+# mdns: false — якщо запускаєш у chroot/контейнері без avahi, інакше впаде
+# «Unable to start mdns: Out of memory».
+# ⚠️ У chroot/контейнері МУСИТЬ існувати /var/lock (uucp-lock gensio): без
+# нього ser2net слухає, але при конекті віддає «Device open failure: Value or
+# file not found» — mkdir -p /var/lock /run/lock перед стартом.
+# Опції nouucplock / nouucplock=true ser2net 4.3 НЕ приймає («Invalid data to
+# parameter»).
+# timeout у 4.3 — це «idle-timeout» у секундах в options; 0 = вимкнено (дефолт),
+# тому просто не задаємо.
+#
+# Старт: ser2net -n -c ser2net-bms.yaml   (або nohup/systemd у фон)
+# Клієнт (напр. VM з com0com+com2tcp) підключається TCP-клієнтом до
+# <хост>:4001 напряму, без telnet-негоціації (accepter "tcp,..." = raw TCP —
+# чистий RS485-байтстрім).
+
+connection: &con_bms
+  accepter: tcp,0.0.0.0,4001
+  enable: on
+  options:
+    max-connections: 1
+    mdns: false
+  connector: serialdev,/dev/ttyUSB0,9600n81,local

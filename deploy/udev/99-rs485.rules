@@ -1,0 +1,21 @@
+# Стале імʼя /dev/rs485-bms для FTDI USB-RS485 адаптера, щоб не ловити
+# "/dev/ttyUSB0 став /dev/ttyUSB1" після ребуту/переткнення USB.
+#
+# 1. Встав адаптер, знайди його реальні ідентифікатори:
+#      udevadm info -a -n /dev/ttyUSB0 | grep -E 'idVendor|idProduct|serial' | head -5
+#    Типовий FTDI FT232: idVendor=0403, idProduct=6001.
+#    Якщо на шині кілька однакових адаптерів — додай ATTRS{serial}=="XXXXXXXX"
+#    (серійник конкретного чипа з того ж виводу), інакше правило підхопить
+#    перший-ліпший.
+#
+# 2. Поклади файл у /etc/udev/rules.d/99-rs485.rules, познач:
+#      sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# 3. Пристрій з'явиться як /dev/rs485-bms (і далі теж /dev/ttyUSBx) — постав
+#    SERIAL_PORT=/dev/rs485-bms (і BMS_PORT=/dev/rs485-bms) у jbd2mqtt.env.
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", SYMLINK+="rs485-bms", GROUP="dialout", MODE="0660"
+
+# Якщо в тебе декілька FTDI-адаптерів на хості — розкоментуй і впиши серійник
+# саме цього (з udevadm info вище), щоб не зачепити інший:
+# SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ATTRS{serial}=="XXXXXXXX", SYMLINK+="rs485-bms", GROUP="dialout", MODE="0660"

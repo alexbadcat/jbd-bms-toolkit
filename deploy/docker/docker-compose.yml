@@ -1,0 +1,18 @@
+services:
+  jbd2mqtt:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: jbd2mqtt
+    restart: unless-stopped
+    # jbd2mqtt.env не копіюється в образ — конфіг заходить змінними
+    # середовища (код сам читає MQTT_HOST/BMS_PORT/... з os.environ,
+    # якщо файлу jbd2mqtt.env поряд зі скриптом нема).
+    env_file:
+      - ../../jbd2mqtt.env
+    devices:
+      # Заміни на свій реальний шлях (udev-правило deploy/udev/99-rs485.rules
+      # дає стале /dev/rs485-bms замість "плаваючого" /dev/ttyUSB0).
+      - /dev/ttyUSB0:/dev/ttyUSB0
+    environment:
+      - BMS_PORT=/dev/ttyUSB0

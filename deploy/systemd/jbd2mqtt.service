@@ -1,0 +1,29 @@
+[Unit]
+Description=jbd2mqtt - JBD BMS to MQTT/Home Assistant bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jbd2mqtt
+Group=dialout
+WorkingDirectory=/opt/jbd-bms-toolkit
+# jbd2mqtt.py та jbd_logger.py самі читають jbd2mqtt.env з WorkingDirectory;
+# EnvironmentFile тут — для решти скриптів (BMS_PORT, BMS_ESUP_ADDRS тощо),
+# якщо запускаєш їх як окремі oneshot-юніти/вручну через systemd-run.
+EnvironmentFile=/opt/jbd-bms-toolkit/jbd2mqtt.env
+ExecStart=/usr/bin/python3 /opt/jbd-bms-toolkit/src/jbd2mqtt.py
+Restart=always
+RestartSec=5
+# /dev/ttyUSB* (або стале udev-імʼя — деплой/udev/99-rs485.rules) з'являється
+# не одразу після бута; не валити юніт, якщо порту ще нема на старті.
+StartLimitIntervalSec=0
+
+# Трохи ізоляції, без заважання доступу до serial/MQTT
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/jbd-bms-toolkit
+
+[Install]
+WantedBy=multi-user.target

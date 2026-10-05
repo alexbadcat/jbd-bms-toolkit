@@ -1,0 +1,22 @@
+# Секрети/локальний конфіг
+jbd2mqtt.env
+.env
+*.env
+!jbd2mqtt.env.example
+
+# Логи/дані зі скриптів цього репо
+*.log
+*.csv
+*.out
+*.state.json
+backups/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# OS/editor
+.DS_Store

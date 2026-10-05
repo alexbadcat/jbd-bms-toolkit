@@ -1,0 +1,298 @@
+# Cell voltage guard — stop charging before the BMS trips OVP
+#
+# Required entities (rename to match your own setup):
+#   sensor.bms_a_cell_max          - highest cell voltage, pack A (from jbd2mqtt)
+#   sensor.bms_b_cell_max          - highest cell voltage, pack B
+#   sensor.bms_b_cell_max_raw      - pack B's own (uncompensated) cell_max reading;
+#                                     only needed if that BMS has a known per-cell
+#                                     calibration offset — its hardware OVP and its
+#                                     own balancer act on THIS raw value, not the
+#                                     corrected one your software reports. Drop this
+#                                     entity (and the third list element below) if
+#                                     both packs read accurately.
+#   number.inverter_max_charging_current  - inverter's battery charge current limit (A)
+#   number.inverter_program_1_soc  - inverter charge-schedule SOC target #1
+#   number.inverter_program_5_soc  - inverter charge-schedule SOC target #5;
+#                                     == 100 is used here as the signal for an
+#                                     "always hold near full" backup/emergency mode
+#   input_boolean.balance_hold     - "on" during an active balance cycle (see
+#                                     balance_hold.yaml) — tightens the ladder
+#
+# Why this exists: a LiFePO4 pack's top knee is steep — a cell can climb from a
+# safe voltage to the BMS's hardware OVP trip within one poll cycle if the
+# charger just keeps pushing full current. This automation throttles the
+# inverter's charge current in steps as any monitored cell approaches OVP, so
+# the BMS's own protection circuit (MOSFET cutoff) never has to fire.
+#
+# ⚠️ On a Deye/Solarman inverter, setting the charge current limit to 0 A does
+# NOT by itself stop CV voltage hold on the battery bus — you need to turn the
+# grid-charging switch off for a hard stop. The "emergency" branches here
+# intentionally leave the limit-only stop in place (current=0, switch left on)
+# because in that mode the inverter's own control loop is expected to keep the
+# bus near the target voltage; use balance_hold.yaml's pattern if you need a
+# true hard stop instead.
+alias: "Cell voltage guard — stop charging before BMS OVP"
+description: >-
+  Throttles the inverter's charge current as any monitored cell approaches the
+  pack's overvoltage protection threshold, in two priority tiers: a tighter
+  0/3/70 A ladder while a balance cycle is held active (input_boolean.balance_hold),
+  and a normal 0/5/70-80 A ladder otherwise (which also recognizes an
+  "emergency"/backup charge mode via program_5's SOC target). A 5-minute
+  heartbeat re-checks actual cell voltages so a threshold crossed during an
+  HA restart self-heals within 5 minutes instead of being silently missed.
+mode: restart
+
+variables:
+  # Highest cell voltage across both packs (see the comment on
+  # sensor.bms_b_cell_max_raw above for why a 3rd, uncompensated reading
+  # may belong in this list).
+  cell_max: >-
+    {{ [states('sensor.bms_a_cell_max') | float(0),
+        states('sensor.bms_b_cell_max') | float(0),
+        states('sensor.bms_b_cell_max_raw') | float(0)] | max }}
+
+triggers:
+  - trigger: numeric_state
+    entity_id:
+      - sensor.bms_a_cell_max
+      - sensor.bms_b_cell_max
+      - sensor.bms_b_cell_max_raw
+    above: 3.62
+    id: slow
+  - trigger: numeric_state
+    entity_id:
+      - sensor.bms_a_cell_max
+      - sensor.bms_b_cell_max
+      - sensor.bms_b_cell_max_raw
+    above: 3.70
+    id: stop
+  - trigger: numeric_state
+    entity_id:
+      - sensor.bms_a_cell_max
+      - sensor.bms_b_cell_max
+      - sensor.bms_b_cell_max_raw
+    below: 3.55
+    id: resume
+  - trigger: numeric_state
+    entity_id:
+      - sensor.bms_a_cell_max
+      - sensor.bms_b_cell_max
+      - sensor.bms_b_cell_max_raw
+    below: 3.50
+    id: restore
+  # Heartbeat: catches any threshold crossed while HA was restarting
+  - trigger: time_pattern
+    minutes: "/5"
+    id: beat
+
+conditions:
+  # Don't act on stale/unavailable sensors (e.g. right after HA start)
+  - condition: template
+    value_template: >-
+      {{ has_value('sensor.bms_a_cell_max') and has_value('sensor.bms_b_cell_max')
+         and has_value('sensor.bms_b_cell_max_raw')
+         and has_value('number.inverter_max_charging_current') }}
+
+actions:
+  - choose:
+      # ============ Priority tier: active balance cycle (balance_hold = on) ============
+      # Full stop — a monitored cell is at/above the stop threshold
+      - conditions:
+          - condition: template
+            value_template: "{{ cell_max >= 3.70 }}"
+          - condition: template
+            value_template: "{{ (states('number.inverter_max_charging_current') | int(0)) > 0 }}"
+          - condition: state
+            entity_id: input_boolean.balance_hold
+            state: "on"
+        sequence:
+          # Writes are duplicated with a short delay — some inverter/RS485
+          # integrations occasionally drop the first set_value silently.
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 0 }
+          - delay: { seconds: 3 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 0 }
+
+      # Slow down — approaching the knee, trickle-charge so balancing can catch up
+      - conditions:
+          - condition: template
+            value_template: "{{ cell_max >= 3.62 }}"
+          - condition: template
+            value_template: "{{ (states('number.inverter_max_charging_current') | int(0)) > 3 }}"
+          - condition: state
+            entity_id: input_boolean.balance_hold
+            state: "on"
+        sequence:
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 3 }
+          - delay: { seconds: 3 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 3 }
+
+      # Fast climb back to the knee once the cell has relaxed well below it
+      - conditions:
+          - condition: template
+            value_template: "{{ cell_max <= 3.50 }}"
+          - condition: template
+            value_template: "{{ (states('number.inverter_max_charging_current') | int(0)) in [0, 3] }}"
+          - condition: state
+            entity_id: input_boolean.balance_hold
+            state: "on"
+        sequence:
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data:
+              value: "{{ 70 if cell_max < 3.45 else 10 }}"
+          - delay: { seconds: 3 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data:
+              value: "{{ 70 if cell_max < 3.45 else 10 }}"
+
+      # Partial resume — dropped below the resume threshold but not fully relaxed
+      - conditions:
+          - condition: template
+            value_template: "{{ cell_max <= 3.55 }}"
+          - condition: template
+            value_template: "{{ (states('number.inverter_max_charging_current') | int(0)) == 0 }}"
+          - condition: state
+            entity_id: input_boolean.balance_hold
+            state: "on"
+        sequence:
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 3 }
+          - delay: { seconds: 3 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 3 }
+
+      # ============ Normal tier: balance_hold is off ============
+      # Full stop. In "emergency" backup mode (program_5 target == 100%) leave
+      # the SOC schedule alone — just stop pushing current, don't fight the mode.
+      - conditions:
+          - condition: template
+            value_template: "{{ cell_max >= 3.70 }}"
+          - condition: template
+            value_template: "{{ (states('number.inverter_max_charging_current') | int(0)) > 0 }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ (states('number.inverter_program_5_soc') | int(0)) == 100 }}"
+            then:
+              - action: number.set_value
+                target: { entity_id: number.inverter_max_charging_current }
+                data: { value: 0 }
+              - delay: { seconds: 3 }
+              - action: number.set_value
+                target: { entity_id: number.inverter_max_charging_current }
+                data: { value: 0 }
+            else:
+              - action: number.set_value
+                target: { entity_id: number.inverter_max_charging_current }
+                data:
+                  value: "{{ 3 if is_state('input_boolean.balance_hold', 'on') else 5 }}"
+              - delay: { seconds: 3 }
+              - action: number.set_value
+                target: { entity_id: number.inverter_max_charging_current }
+                data:
+                  value: "{{ 3 if is_state('input_boolean.balance_hold', 'on') else 5 }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ (states('number.inverter_program_1_soc') | int(0)) != 90 }}"
+                then:
+                  - action: number.set_value
+                    target: { entity_id: number.inverter_program_1_soc }
+                    data: { value: 90 }
+                  - delay: { seconds: 3 }
+                  - action: number.set_value
+                    target: { entity_id: number.inverter_program_1_soc }
+                    data: { value: 90 }
+
+      # Slow down
+      - conditions:
+          - condition: template
+            value_template: "{{ cell_max >= 3.62 }}"
+          - condition: template
+            value_template: "{{ (states('number.inverter_max_charging_current') | int(0)) > 5 }}"
+        sequence:
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data:
+              value: "{{ 3 if is_state('input_boolean.balance_hold', 'on') else 5 }}"
+          - delay: { seconds: 3 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data:
+              value: "{{ 3 if is_state('input_boolean.balance_hold', 'on') else 5 }}"
+
+      # Partial resume while still in emergency backup mode
+      - conditions:
+          - condition: template
+            value_template: "{{ cell_max <= 3.55 }}"
+          - condition: template
+            value_template: >-
+              {{ (states('number.inverter_max_charging_current') | int(0)) == 0
+                 and (states('number.inverter_program_5_soc') | int(0)) == 100 }}
+        sequence:
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data:
+              value: "{{ 3 if is_state('input_boolean.balance_hold', 'on') else 5 }}"
+          - delay: { seconds: 3 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data:
+              value: "{{ 3 if is_state('input_boolean.balance_hold', 'on') else 5 }}"
+
+      # Partial resume during the nightly top-up window (see nightly_topup.yaml):
+      # raise the SOC target back to 100% so the top-up automation can finish
+      - conditions:
+          - condition: template
+            value_template: "{{ cell_max <= 3.55 }}"
+          - condition: template
+            value_template: >-
+              {{ (states('number.inverter_max_charging_current') | int(0)) == 5
+                 and (states('number.inverter_program_1_soc') | int(0)) == 90
+                 and (states('number.inverter_program_5_soc') | int(0)) != 100 }}
+          - condition: time
+            after: "03:00:00"
+            before: "06:58:00"
+        sequence:
+          - action: number.set_value
+            target: { entity_id: number.inverter_program_1_soc }
+            data: { value: 100 }
+          - delay: { seconds: 3 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_program_1_soc }
+            data: { value: 100 }
+
+      # Fully relaxed — restore full charge current (higher in emergency mode)
+      - conditions:
+          - condition: template
+            value_template: "{{ cell_max <= 3.50 }}"
+          - condition: template
+            value_template: "{{ (states('number.inverter_max_charging_current') | int(0)) in [3, 5] }}"
+          - condition: or
+            conditions:
+              - condition: template
+                value_template: "{{ (states('number.inverter_program_5_soc') | int(0)) == 100 }}"
+              - condition: and
+                conditions:
+                  - condition: template
+                    value_template: "{{ (states('number.inverter_program_5_soc') | int(0)) != 100 }}"
+                  - condition: time
+                    after: "06:58:30"
+                    before: "03:00:00"
+        sequence:
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data:
+              value: >-
+                {{ 3 if is_state('input_boolean.balance_hold', 'on')
+                   else (80 if states('number.inverter_program_5_soc') | int(0) == 100 else 70) }}

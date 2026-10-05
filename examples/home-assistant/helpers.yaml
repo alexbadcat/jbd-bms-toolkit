@@ -1,0 +1,27 @@
+# Helper entities used by the automations in this directory.
+#
+# Easiest install: Settings -> Devices & services -> Helpers -> + Create
+# helper, and create each one through the UI with these names/options. Or,
+# if you manage helpers as YAML (`homeassistant: packages:` or similar),
+# drop this file in as-is.
+
+input_boolean:
+  balance_hold:
+    name: Balance hold (internal cycle flag)
+    icon: mdi:battery-sync
+
+input_select:
+  ess_mode:
+    name: ESS mode
+    icon: mdi:home-battery
+    options:
+      - Auto
+      - Eco
+      - Emergency
+      - Balance
+
+input_text:
+  ess_mode_before_balance:
+    name: ESS mode before balance (internal)
+    icon: mdi:restore
+    max: 20

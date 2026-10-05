@@ -1,0 +1,227 @@
+# Balance hold — a cycling "balance mode" for the ESS, driven by an input_select
+#
+# Required entities:
+#   input_select.ess_mode           - your ESS mode selector; must include an
+#                                      option named "Balance" (see helpers.yaml)
+#   input_boolean.balance_hold      - internal flag this automation drives;
+#                                      cell_voltage_guard.yaml reads it to switch
+#                                      to a tighter current ladder
+#   switch.inverter_grid_charging   - inverter's grid-charging enable switch
+#   automation.cell_voltage_guard   - the cell_voltage_guard.yaml automation
+#                                      (entity_id of that automation once added)
+#   number.inverter_max_charging_current
+#   binary_sensor.inverter_grid     - "on" while grid power is present
+#   sensor.inverter_battery         - inverter's own SOC % (safety fallback)
+#   sensor.bms_a_cell_max, sensor.bms_b_cell_max
+#   input_text.ess_mode_before_balance - set by night_balance_guard.yaml when
+#                                      IT triggers a balance cycle automatically;
+#                                      used here only to tell a manually-started
+#                                      cycle apart from an automatic one (for the
+#                                      "still balancing?" reminder below)
+#   notify.notify                   - replace with your own notify service
+#
+# Why this exists: passive balancing only drains ~30-60 mA per cell, and only
+# does anything useful on the pack's top knee (>~3.45 V) — on the flat part of
+# the curve, voltage differences are mostly sensor/wiring noise, not real
+# charge imbalance. So instead of holding the pack at a fixed high voltage
+# (which risks OVP) or leaving balancing to chance, this automation cycles the
+# charge current between a small value and zero: charge a little -> rest with
+# the balancer working in "static" mode -> charge a little more. See
+# cell_voltage_guard.yaml, which does the actual current throttling once this
+# flag is set.
+#
+# ⚠️ Setting the charge current limit to 0 A does NOT by itself stop a Deye/
+# Solarman-style inverter's CV voltage hold on the battery bus — this
+# automation also turns switch.inverter_grid_charging off/on around the cycle
+# where a true pause matters (see the exit/entry sequences below).
+alias: "Balance hold — small-current balance cycle"
+description: >-
+  Drives a "Balance" option on an ESS mode selector: while selected, grid
+  charging stays enabled, the cell voltage guard is kept on, and the charge
+  current is nudged to a value the guard's tighter ladder can manage, cycling
+  the pack through the top knee so the passive balancer gets real time to
+  work. Exits automatically back to a safe default if grid power drops for 10
+  minutes, SOC falls below 85%, or the helper is turned off by hand.
+mode: single
+
+triggers:
+  - trigger: state
+    entity_id: input_select.ess_mode
+    id: mode
+  - trigger: state
+    entity_id: binary_sensor.inverter_grid
+    to: "off"
+    for: { minutes: 10 }
+    id: grid
+  - trigger: numeric_state
+    entity_id: sensor.inverter_battery
+    below: 85
+    id: soc
+  - trigger: state
+    entity_id: input_boolean.balance_hold
+    to: "off"
+    id: "off"
+  - trigger: time_pattern
+    minutes: "/5"
+    id: beat
+  # Reminder nudges if "Balance" has been selected for a long time unattended
+  - trigger: state
+    entity_id: input_select.ess_mode
+    to: "Balance"
+    for: { hours: 24 }
+    id: long
+  - trigger: state
+    entity_id: input_select.ess_mode
+    to: "Balance"
+    for: { hours: 48 }
+    id: long
+  - trigger: state
+    entity_id: input_select.ess_mode
+    to: "Balance"
+    for: { hours: 72 }
+    id: long
+
+conditions: []
+
+actions:
+  - choose:
+      # Long-running MANUAL balance cycle — nudge in case it was forgotten.
+      # input_text.ess_mode_before_balance stays empty when a human picked
+      # "Balance" themselves (night_balance_guard.yaml always fills it in
+      # before switching automatically), so this only fires for manual runs.
+      - conditions:
+          - condition: trigger
+            id: long
+          - condition: template
+            value_template: "{{ states('input_text.ess_mode_before_balance') | trim == '' }}"
+        sequence:
+          - action: notify.notify
+            data:
+              title: "ESS: still in Balance mode"
+              message: >-
+                "Balance" has been selected manually for
+                {{ ((now() - states['input_select.ess_mode'].last_changed).total_seconds() / 3600) | round(0) }}
+                hours. Top spread: pack A
+                {{ states('sensor.bms_a_top_spread_now') }} / pack B
+                {{ states('sensor.bms_b_top_spread_now') }} mV. Switch back to
+                Auto once it has settled (< 40 mV).
+
+      # Mode selector changed — enter or leave the cycle
+      - conditions:
+          - condition: trigger
+            id: mode
+        sequence:
+          - if:
+              - condition: state
+                entity_id: input_select.ess_mode
+                state: "Balance"
+            then:
+              - action: input_boolean.turn_on
+                target: { entity_id: input_boolean.balance_hold }
+              - action: switch.turn_on
+                target: { entity_id: switch.inverter_grid_charging }
+              - action: automation.turn_on
+                target: { entity_id: automation.cell_voltage_guard }
+              - action: number.set_value
+                target: { entity_id: number.inverter_max_charging_current }
+                data: { value: 70 }
+            else:
+              - condition: state
+                entity_id: input_boolean.balance_hold
+                state: "on"
+              - action: input_boolean.turn_off
+                target: { entity_id: input_boolean.balance_hold }
+
+      # Safety exit — grid lost for 10 min, or SOC fell below 85%
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ is_state('input_boolean.balance_hold', 'on') and
+                 (trigger.id in ['grid', 'soc'] or
+                  is_state('binary_sensor.inverter_grid', 'off') or
+                  states('sensor.inverter_battery') | int(100) < 85) }}
+        sequence:
+          - action: input_select.select_option
+            target: { entity_id: input_select.ess_mode }
+            data: { option: "Auto" }
+          - action: switch.turn_on
+            target: { entity_id: switch.inverter_grid_charging }
+          - action: input_boolean.turn_off
+            target: { entity_id: input_boolean.balance_hold }
+          - action: automation.turn_on
+            target: { entity_id: automation.cell_voltage_guard }
+          - delay: { seconds: 3 }
+          - action: notify.notify
+            data:
+              title: "ESS: balance cycle paused"
+              message: >-
+                Reason:
+                {{ 'no grid for >10 min' if is_state('binary_sensor.inverter_grid', 'off')
+                   else 'SOC ' ~ states('sensor.inverter_battery') ~ '%' }}.
+                Charge current restored to 80 A, cell voltage guard re-enabled.
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 80 }
+          - delay: { seconds: 3 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 80 }
+
+      # Helper turned off by hand
+      - conditions:
+          - condition: trigger
+            id: "off"
+        sequence:
+          - action: switch.turn_on
+            target: { entity_id: switch.inverter_grid_charging }
+          - action: automation.turn_on
+            target: { entity_id: automation.cell_voltage_guard }
+          - delay: { seconds: 3 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 80 }
+          - delay: { seconds: 3 }
+          - action: number.set_value
+            target: { entity_id: number.inverter_max_charging_current }
+            data: { value: 80 }
+
+      # Heartbeat — self-heal if a dependency got switched off behind our back,
+      # and nudge the current back up once the pack has relaxed below 3.50 V
+      - conditions:
+          - condition: trigger
+            id: beat
+          - condition: state
+            entity_id: input_boolean.balance_hold
+            state: "on"
+          - condition: state
+            entity_id: binary_sensor.inverter_grid
+            state: "on"
+          - condition: template
+            value_template: >-
+              {{ ((states('number.inverter_max_charging_current') | int(0)) == 0 and
+                  ([states('sensor.bms_a_cell_max') | float(0),
+                    states('sensor.bms_b_cell_max') | float(0)] | max) <= 3.50) or
+                 is_state('switch.inverter_grid_charging', 'off') or
+                 is_state('automation.cell_voltage_guard', 'off') }}
+          - condition: template
+            value_template: >-
+              {{ has_value('sensor.bms_b_cell_max') and has_value('sensor.bms_a_cell_max') }}
+        sequence:
+          - action: switch.turn_on
+            target: { entity_id: switch.inverter_grid_charging }
+          - action: automation.turn_on
+            target: { entity_id: automation.cell_voltage_guard }
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ (states('number.inverter_max_charging_current') | int(0)) == 0 and
+                     ([states('sensor.bms_a_cell_max') | float(0),
+                       states('sensor.bms_b_cell_max') | float(0)] | max) <= 3.50 }}
+            then:
+              - action: number.set_value
+                target: { entity_id: number.inverter_max_charging_current }
+                data: { value: 70 }
+              - delay: { seconds: 3 }
+              - action: number.set_value
+                target: { entity_id: number.inverter_max_charging_current }
+                data: { value: 70 }
