@@ -2,12 +2,14 @@
 """Юніт-тести top_spread.py — без реального демона, з ізольованим tmp-файлом
 персисту (tmp_path) і явно поданим часом (now=), без time.sleep.
 
-Запуск: з кореня репо — python3 -m pytest tests/ -q
+Запуск: python3 -m pytest tests/ -q (з кореня репо)
 """
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+# модулі лежать у корені (приватний репо) або в src/ (публічний jbd-bms-toolkit)
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path[:0] = [os.path.join(_ROOT, "src"), _ROOT]
 import top_spread as ts                                           # noqa: E402
 
 

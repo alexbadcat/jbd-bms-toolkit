@@ -3,12 +3,14 @@
 серійного порту: BalanceModeFollower._write_and_verify підміняється фейком,
 час подається явно через now=, а не через реальний time.sleep.
 
-Запуск: з кореня репо — python3 -m pytest tests/ -q
+Запуск: python3 -m pytest tests/ -q (з кореня репо)
 """
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+# модулі лежать у корені (приватний репо) або в src/ (публічний jbd-bms-toolkit)
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path[:0] = [os.path.join(_ROOT, "src"), _ROOT]
 import balance_mode as bm                                         # noqa: E402
 
 
