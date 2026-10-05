@@ -1,10 +1,14 @@
+<p align="center">
+  <a href="README.uk.md"><img src="https://img.shields.io/badge/🇺🇦-Українська-0057B7?style=for-the-badge&labelColor=FFD700" alt="Українська"></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/🇬🇧-English-012169?style=for-the-badge" alt="English"></a>
+</p>
+
 <div align="center">
 
 # 🔋 jbd-bms-toolkit
 
 **Спілкування з JBD LiFePO4 BMS по RS485, усе в Home Assistant, балансування паралельних паків і синхронний SOC.**
 
-*[English version](README.md)*
 
 ![Ліцензія](https://img.shields.io/badge/ліцензія-MIT-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-3776AB)

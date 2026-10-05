@@ -1,10 +1,14 @@
+<p align="center">
+  <a href="README.uk.md"><img src="https://img.shields.io/badge/🇺🇦-Українська-0057B7?style=for-the-badge&labelColor=FFD700" alt="Українська"></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/🇬🇧-English-012169?style=for-the-badge" alt="English"></a>
+</p>
+
 <div align="center">
 
 # 🔋 jbd-bms-toolkit
 
 **Talk to JBD LiFePO4 BMS over RS485, publish everything to Home Assistant, keep parallel packs balanced and their SOC in sync.**
 
-*[Українська версія](README.uk.md)*
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-3776AB)
