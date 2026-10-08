@@ -12,6 +12,8 @@ WorkingDirectory=/opt/jbd-bms-toolkit
 # EnvironmentFile тут — для решти скриптів (BMS_PORT, BMS_ESUP_ADDRS тощо),
 # якщо запускаєш їх як окремі oneshot-юніти/вручну через systemd-run.
 EnvironmentFile=/opt/jbd-bms-toolkit/jbd2mqtt.env
+# unbuffered stdout, otherwise log lines reach the journal in big delayed chunks
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 /opt/jbd-bms-toolkit/src/jbd2mqtt.py
 Restart=always
 RestartSec=5
