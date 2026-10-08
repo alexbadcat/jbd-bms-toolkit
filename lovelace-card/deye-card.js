@@ -41,9 +41,9 @@ class DeyeCard extends HTMLElement {
   }
   // версія модуля вкладки графіків (/local/deye-graphs.js?v=N) — бампати при зміні deye-graphs.js,
   // щоб браузер не тримав старий кеш динамічного import() (ha_resource.py кеш-бастить лише сам deye-card.js)
-  static get GRAPHS_V() { return 2; }
+  static get GRAPHS_V() { return 3; }
   // версія модуля вкладки «Відключення» (/local/deye-outage.js?v=N) — той самий кеш-бастинг патерн
-  static get OUTAGE_V() { return 4; }
+  static get OUTAGE_V() { return 5; }
   _col(k) { return (this._colors && this._colors[k]) || DeyeCard.DEFAULT_COLORS[k]; }
 
   connectedCallback() {
