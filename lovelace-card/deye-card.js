@@ -12,8 +12,8 @@ class DeyeCard extends HTMLElement {
     const sc = c && (c.scale != null ? c.scale : c.size);
     this._scale = Math.min(1.5, Math.max(0.5, Number(sc) || 1));
     // сенсори-оцінки часу (укр-рядки «X год Y хв»); показуються в mini лише при заряді/розряді
-    this._t2full = (c && c.time_to_full) || 'sensor.chas_do_povnogo_zariadu';
-    this._t2empty = (c && c.time_to_empty) || 'sensor.chas_do_rozriadu';
+    this._t2full = (c && c.time_to_full) || 'sensor.prognoz_batarei_eta_batareia_do_povnogo_zariadu';
+    this._t2empty = (c && c.time_to_empty) || 'sensor.prognoz_batarei_eta_batareia_zariadu_lishilos';
     // анімації потоку/шевронів — постійний driver кадрів; на слабких GPU-кіосках
     // (Mali-T720, планшет-передпокій) весь viewport перемальовується щокадру → лаги.
     // animate:false вимикає всі keyframes (крапки/шеврони/пульс), лишаючи статичну схему.
@@ -160,10 +160,9 @@ class DeyeCard extends HTMLElement {
     const online = this._st('connection', 'binary_sensor') == null ? true : this._on('connection');
     const devOk = (this._st('device_state') || 'Normal') === 'Normal' && (this._st('device_alarm') || 'OK') === 'OK';
     const socCol = this._socColor(soc);
-    const tEid = battCharge ? this._t2full : battDischarge ? this._t2empty : null;
-    const tSt = tEid ? this._estate(tEid) : null;
-    const timeShown = !!(tSt && /\d/.test(tSt));
-    return { soc, bp, gp, genp, lp, bst, battCharge, battDischarge, gridImport, gridExport, gridOn, genOn, online, devOk, socCol, tEid, tSt, timeShown };
+    const t = this._timeInfo(battCharge, battDischarge);
+    const tEid = t.eid, tSt = t.text, timeShown = t.shown;
+    return { soc, bp, gp, genp, lp, bst, battCharge, battDischarge, gridImport, gridExport, gridOn, genOn, online, devOk, socCol, tEid, tSt, timeShown, tLbl: t.label };
   }
 
   // значення для точкового оновлення [data-u]-вузлів без перебудови DOM
@@ -258,7 +257,7 @@ class DeyeCard extends HTMLElement {
     // кожні ~30с, і без цього гварда графіки постійно ремонтувались би (втрата обраного
     // діапазону + зайвий рефетч великих 7д-масивів на кожен тік hass)
     const stateSig = (this._tab === 'graphs' || this._tab === 'outage') ? '' : [
-      c.battCharge, c.battDischarge, c.gridOn, c.gridImport, c.gridExport, c.genOn, c.devOk, c.online, c.socCol, c.timeShown, c.bst,
+      c.battCharge, c.battDischarge, c.gridOn, c.gridImport, c.gridExport, c.genOn, c.devOk, c.online, c.socCol, c.timeShown, c.tLbl, c.bst,
       this._st('work_mode', 'select'), this._st('energy_pattern', 'select'),
       this._st('device_state'), this._st('device_alarm'), this._mode(),
       // банер реального критичного режиму: причини авто-екстреного дня + фактичні полички/струм
@@ -463,12 +462,12 @@ class DeyeCard extends HTMLElement {
     const flow2 = flow(gridImport || gridExport, gridImport, gridExport ? cHouse : cGrid, !gridOn);
 
     // рядок оцінки часу — ТІЛЬКИ під час заряду/розряду і тільки якщо сенсор віддав число
-    const tEid = battCharge ? this._t2full : battDischarge ? this._t2empty : null;
-    const tSt = tEid ? this._estate(tEid) : null;
-    const timeRow = tSt && /\d/.test(tSt) ? `
-      <div class="mtime" data-eid="${tEid}" style="color:${battCharge ? '#34c759' : '#ff9f0a'}">
-        ${this._ic(battCharge ? 'battery-clock' : 'clock-end', 'mi')}
-        <span class="mtl">${battCharge ? 'до повного заряду' : 'заряду лишилось'}</span>
+    const ti = this._timeInfo(battCharge, battDischarge);
+    const tEid = ti.eid, tSt = ti.text;
+    const timeRow = ti.shown ? `
+      <div class="mtime" data-eid="${tEid}" style="color:${ti.color}">
+        ${this._ic(ti.icon, 'mi')}
+        <span class="mtl">${ti.label}</span>
         <b data-u="m_time">${tSt}</b>
       </div>` : '';
 
@@ -879,6 +878,25 @@ class DeyeCard extends HTMLElement {
   _estate(eid) { const e = this._hass && this._hass.states[eid]; return e ? e.state : null; }
   // «Режим роботи» — чотирипозиційний input_select.deye_mode («Еко» / «Авто» / «Критичний» /
   // «Балансування»), замінює колишній тумблер input_boolean.deye_winter_ready (виведений з ужитку).
+  // рядок «час батареї»: заряд → до повного; розряд → скільки лишилось; спокій при мережі —
+  // РЕЗЕРВ на випадок відключення (сенсор прогнозу віддає текст «резерв …», коли батарея
+  // стоїть на поличці й дім живить мережа). Лейбл — за змістом тексту, а не лише за напрямом.
+  _timeInfo(battCharge, battDischarge) {
+    const emptySt = this._estate(this._t2empty);
+    const reserve = !battCharge && emptySt && /^резерв/.test(emptySt);
+    let eid = null;
+    if (battCharge) eid = this._t2full;
+    else if (battDischarge || reserve) eid = this._t2empty;
+    let text = eid ? this._estate(eid) : null;
+    const shown = !!(text && /\d/.test(text));
+    if (reserve && text) text = text.replace(/^резерв\s*/, '');
+    return {
+      eid, text, shown,
+      label: battCharge ? 'до повного заряду' : reserve ? 'без світла вистачить на' : 'заряду лишилось',
+      icon: battCharge ? 'battery-clock' : reserve ? 'shield-sun' : 'clock-end',
+      color: battCharge ? '#34c759' : reserve ? '#5ac8fa' : '#ff9f0a',
+    };
+  }
   _modeEid() { return (this._config && this._config.mode_entity) || 'input_select.deye_mode'; }
   // mode_options: мапа внутрішніх (українських) режимів картки на опції ВАШОГО input_select,
   // напр. { eco: 'Eco', auto: 'Auto', emergency: 'Emergency', balance: 'Balance' }.
