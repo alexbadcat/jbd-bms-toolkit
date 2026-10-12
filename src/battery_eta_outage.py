@@ -63,3 +63,18 @@ def next_outage_block_end(windows_strs, now_local):
         elif in_block:
             break
     return block_end
+
+
+def all_outage_blocks(windows_strs, now_local):
+    """Усі майбутні (ще не закінчені) суцільні блоки відключень: [(start, end)], злиті
+    година-в-годину. Для планувальника резерву (battery_eta_reserve.plan)."""
+    items = [parse_outage_window_line(s, now_local.year) for s in (windows_strs or [])]
+    items = sorted((it for it in items if it and it["is_outage"] and it["end"] > now_local),
+                   key=lambda it: it["start"])
+    blocks = []
+    for it in items:
+        if blocks and it["start"] <= blocks[-1][1]:
+            blocks[-1] = (blocks[-1][0], max(blocks[-1][1], it["end"]))
+        else:
+            blocks.append((it["start"], it["end"]))
+    return blocks

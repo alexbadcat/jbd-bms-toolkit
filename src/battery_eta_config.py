@@ -76,3 +76,40 @@ HIST_ENTITIES = [
     f"sensor.{BMS2}_zalishok_iemnosti", f"sensor.{BMS2}_napruga_paketa", f"sensor.{BMS2}_strum",
     f"sensor.{INV}_battery", f"number.{INV}_battery_max_charging_current",
 ]
+
+# ── адаптивний резерв (battery_eta_reserve) ──
+# Погодинна історія напруги мережі (SQLite з таблицею voltage_hourly(ts_hour, avg, min)) —
+# з неї рахуються реальні епізоди відключень для режиму ризику. Порожньо → лише HA-історія.
+ETA_OUTAGE_DB = CFG.get("ETA_OUTAGE_DB", "")
+RES_RECENT_DAYS = int(CFG.get("RES_RECENT_DAYS", "14"))         # «свіже» вікно режиму
+RES_PERCENTILE = float(CFG.get("RES_PERCENTILE", "90"))
+RES_PRIOR_STRENGTH = float(CFG.get("RES_PRIOR_STRENGTH", "8"))  # скільки свіжих епізодів «перевішують» минулий рік
+RES_MIN_H = float(CFG.get("RES_MIN_H", "2"))
+RES_MAX_H = float(CFG.get("RES_MAX_H", "24"))
+RES_ATTACK_FLOOR_H = float(CFG.get("RES_ATTACK_FLOOR_H", "12"))
+RES_ALERT_FLOOR_H = float(CFG.get("RES_ALERT_FLOOR_H", "8"))
+RES_DELAY_H = float(CFG.get("RES_DELAY_H", "0.5"))              # запізнення включення після вікна
+RES_WINDOW_MARGIN = float(CFG.get("RES_WINDOW_MARGIN", "1.15"))
+RES_ECO_FLOOR = int(CFG.get("RES_ECO_FLOOR", "20"))
+RES_NIGHT_SOC_CALM = int(CFG.get("RES_NIGHT_SOC_CALM", "90"))
+RES_CALM_RISK_H = float(CFG.get("RES_CALM_RISK_H", "3"))
+RES_TOPUP_LEAD_H = float(CFG.get("RES_TOPUP_LEAD_H", "3"))
+RES_NIGHT_START_H = int(CFG.get("RES_NIGHT_START_H", "23"))
+RES_NIGHT_END_H = int(CFG.get("RES_NIGHT_END_H", "7"))
+# сутності ескалації (порожньо — не використовувати)
+RES_EMERGENCY_ENTITY = CFG.get("RES_EMERGENCY_ENTITY", "binary_sensor.outage_emergency_unified")
+RES_SEEN_TODAY_ENTITY = CFG.get("RES_SEEN_TODAY_ENTITY", "input_boolean.deye_outage_seen_today")
+RES_ALERT_ENTITY = CFG.get("RES_ALERT_ENTITY", "")
+RES_OUTAGE_ENTITIES = CFG.get("RES_OUTAGE_ENTITIES", "binary_sensor.outage_definite_24h,binary_sensor.outage_possible_24h")
+# масована атака: сумарна тривога за RES_ATTACK_WINDOW_H ≥ RES_ATTACK_ALARM_H → запас RES_POST_ATTACK_FLOOR_H.
+# ⚠️ Поріг калібрувати під свою громаду: короткі пороги в регіонах із щоденними тривогами горять постійно.
+RES_ALARM_HISTORY_ENTITY = CFG.get("RES_ALARM_HISTORY_ENTITY", "")
+RES_ATTACK_ALARM_H = float(CFG.get("RES_ATTACK_ALARM_H", "14"))  # там, де тривога 5–20 год/добу щодня, 14+ за добу = день масованої атаки
+RES_ATTACK_WINDOW_H = float(CFG.get("RES_ATTACK_WINDOW_H", "24"))
+RES_POST_ATTACK_FLOOR_H = float(CFG.get("RES_POST_ATTACK_FLOOR_H", "14"))
+# погода: атрибут temperature у weather.*; холод/мороз піднімають запас
+RES_WEATHER_ENTITY = CFG.get("RES_WEATHER_ENTITY", "weather.pogoda_ua")
+RES_COLD_TEMP = float(CFG.get("RES_COLD_TEMP", "-5"))
+RES_COLD_FLOOR_H = float(CFG.get("RES_COLD_FLOOR_H", "6"))
+RES_FROST_TEMP = float(CFG.get("RES_FROST_TEMP", "-10"))
+RES_FROST_FLOOR_H = float(CFG.get("RES_FROST_FLOOR_H", "8"))

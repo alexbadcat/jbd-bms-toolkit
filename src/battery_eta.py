@@ -55,6 +55,8 @@ from battery_eta_config import (AVAIL_TOPIC, BMS1, BMS2, HaError, INV, MQTT_HOST
                                  ETA_EMA_TAU_MIN, ETA_POLL_SECONDS, ETA_RETRAIN_HOURS,
                                  HA_TOKEN, HA_URL)
 from battery_eta_ha import ha_states_all                          # noqa: E402
+import battery_eta_config as C                                    # noqa: E402
+import battery_eta_reserve as reserve                             # noqa: E402
 
 __all__ = ["backfill"]  # ре-експорт для ручних прогонів (python3 -c "import battery_eta as b; b.backfill()")
 
@@ -107,6 +109,107 @@ def publish_discovery(client):
             "json_attributes_template": "{{ value_json.%s_attrs | tojson }}" % attrs_from,
         })
         client.publish(cfg_topic("sensor", obj), json.dumps(cfg, ensure_ascii=False), retain=True)
+
+    cfg = base_cfg("Адаптивний резерв", "adaptive_reserve")
+    cfg.update({
+        "value_template": "{{ value_json.reserve.current_soc_floor }}",
+        "unit_of_measurement": "%", "icon": "mdi:shield-half-full",
+        "json_attributes_topic": STATE_TOPIC,
+        "json_attributes_template": "{{ value_json.reserve | tojson }}",
+    })
+    client.publish(cfg_topic("sensor", "adaptive_reserve"), json.dumps(cfg, ensure_ascii=False), retain=True)
+
+
+# ───────────────────────── історія відключень для режиму ризику ─────────────────────────
+
+_EPISODES_CACHE = {"at": 0.0, "eps": []}
+
+
+def outage_episodes():
+    """Епізоди відключень із погодинного архіву напруги (ETA_OUTAGE_DB), кеш на годину."""
+    if not C.ETA_OUTAGE_DB or not os.path.exists(C.ETA_OUTAGE_DB):
+        return []
+    if time.time() - _EPISODES_CACHE["at"] < 3600 and _EPISODES_CACHE["eps"]:
+        return _EPISODES_CACHE["eps"]
+    import sqlite3
+    con = sqlite3.connect("file:%s?mode=ro" % C.ETA_OUTAGE_DB, uri=True)
+    try:
+        rows = con.execute("select ts_hour, avg, min from voltage_hourly order by ts_hour").fetchall()
+    finally:
+        con.close()
+    loc = []
+    for ts, avg_v, min_v in rows:
+        t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        loc.append((model.to_kyiv(t).replace(tzinfo=None), avg_v, min_v))
+    _EPISODES_CACHE.update(at=time.time(), eps=reserve.episodes_from_hourly(loc))
+    return _EPISODES_CACHE["eps"]
+
+
+def alarm_changes(entity_id, since):
+    """Зміни стану тривоги з архіву (ETA_OUTAGE_DB.state_changes): [(local naive dt, state)]."""
+    if not entity_id or not C.ETA_OUTAGE_DB or not os.path.exists(C.ETA_OUTAGE_DB):
+        return []
+    import sqlite3
+    con = sqlite3.connect("file:%s?mode=ro" % C.ETA_OUTAGE_DB, uri=True)
+    try:
+        rows = con.execute("select changed_at, state from state_changes where entity_id=? order by changed_at",
+                           (entity_id,)).fetchall()
+    except sqlite3.Error:
+        rows = []
+    finally:
+        con.close()
+    out = []
+    for ts, st in rows:
+        t = model.to_kyiv(datetime.fromisoformat(ts.replace("Z", "+00:00"))).replace(tzinfo=None)
+        out.append((t, st))
+    return out
+
+
+def compute_reserve(states, live, programs, now_local, hourly, ema, efficiency):
+    now_naive = now_local.replace(tzinfo=None)
+    rk = reserve.risk_hours(outage_episodes(), now_naive, recent_days=C.RES_RECENT_DAYS,
+                            p=C.RES_PERCENTILE, prior_strength=C.RES_PRIOR_STRENGTH,
+                            min_h=C.RES_MIN_H, max_h=C.RES_MAX_H)
+
+    def on(eid):
+        return bool(eid) and (states.get(eid) or {}).get("state") == "on"
+
+    alarm_h = reserve.alarm_hours(alarm_changes(C.RES_ALARM_HISTORY_ENTITY, now_naive), now_naive,
+                                  window_h=C.RES_ATTACK_WINDOW_H)
+    temp = None
+    try:
+        temp = float(((states.get(C.RES_WEATHER_ENTITY) or {}).get("attributes") or {}).get("temperature"))
+    except (TypeError, ValueError):
+        temp = None
+    risk_h, why = reserve.escalate(
+        rk["hours"], rk["attack_level_h"], emergency_on=on(C.RES_EMERGENCY_ENTITY),
+        seen_long_today=on(C.RES_SEEN_TODAY_ENTITY), alert_on=on(C.RES_ALERT_ENTITY),
+        attack_floor_h=C.RES_ATTACK_FLOOR_H, alert_floor_h=C.RES_ALERT_FLOOR_H,
+        post_attack=alarm_h >= C.RES_ATTACK_ALARM_H, post_attack_floor_h=C.RES_POST_ATTACK_FLOOR_H,
+        outdoor_temp=temp, cold_temp=C.RES_COLD_TEMP, cold_floor_h=C.RES_COLD_FLOOR_H,
+        frost_temp=C.RES_FROST_TEMP, frost_floor_h=C.RES_FROST_FLOOR_H)
+    windows = []
+    for eid in [e.strip() for e in C.RES_OUTAGE_ENTITIES.split(",") if e.strip()]:
+        windows += ((states.get(eid) or {}).get("attributes") or {}).get("windows") or []
+    blocks = outage.all_outage_blocks(windows, now_naive)
+    pl = reserve.plan(now_naive, programs, live["cap_wh"], live["energy_wh"], live["shutdown_soc"],
+                      blocks, risk_h, why, hourly, ema, efficiency,
+                      delay_h=C.RES_DELAY_H, window_margin=C.RES_WINDOW_MARGIN,
+                      eco_floor=C.RES_ECO_FLOOR, night_soc_calm=C.RES_NIGHT_SOC_CALM,
+                      calm_risk_h=C.RES_CALM_RISK_H, topup_lead_h=C.RES_TOPUP_LEAD_H,
+                      night_start_h=C.RES_NIGHT_START_H, night_end_h=C.RES_NIGHT_END_H)
+    if not pl:
+        return {"current_soc_floor": None}
+    pl.update({
+        "статистика_свіжих_епізодів": rk["recent_n"], "свіжий_p90_год": rk["recent_p"],
+        "минулий_рік_епізодів": rk["last_year_n"], "минулий_рік_p90_год": rk["last_year_p"],
+        "вага_свіжих": rk["weight_recent"],
+        "тривога_год_за_%d_год" % int(C.RES_ATTACK_WINDOW_H): round(alarm_h, 1),
+        "температура_c": temp,
+        "відключення_в_плані": ["%s–%s" % (a.strftime("%d.%m %H:%M"), b.strftime("%H:%M")) for a, b in blocks],
+        "оновлено": now_local.strftime("%d.%m %H:%M"),
+    })
+    return pl
 
 
 # ───────────────────────── живий стан з HA ─────────────────────────
@@ -358,6 +461,11 @@ def tick(state, client, log=print):
             "модель_навчена": state.get("last_trained"),
         },
     }
+    try:
+        payload["reserve"] = compute_reserve(states, live, programs, now_local, hourly, ema, efficiency)
+    except Exception as e:                                       # noqa: BLE001
+        log("[reserve] помилка: %s" % e)
+        payload["reserve"] = {"current_soc_floor": None, "error": str(e)}
     client.publish(STATE_TOPIC, json.dumps(payload, ensure_ascii=False))
     client.publish(AVAIL_TOPIC, "online", retain=True)
     log("[tick] empty=%s full=%s grid=%s load=%.0fВт energy=%.0fВтг cap=%.0fВтг" %
