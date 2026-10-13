@@ -388,7 +388,9 @@ def tick(state, client, log=print):
                                         efficiency=efficiency, now_local=now_local)
     # Мережа є, а батарея вже на поличці слоту (або нижче) — вона НЕ розряджається, дім живить
     # мережа. «Вистачить на 0 хв» тут брехня; корисна цифра — резерв на випадок відключення.
-    standby = live["grid_on"] and dep["reached"] and (dep["minutes"] or 0) <= 5
+    # Поки є мережа — головне питання «а якщо світло зникне?», тож показуємо резерв без мережі;
+    # час до полички (економічний розряд) — лише в атрибутах, щоб не лякати «лишилось 20 хв».
+    standby = live["grid_on"]
     if standby:
         dep_show = dict(dep_off, label="резерв, якщо зникне світло")
     else:
@@ -461,11 +463,14 @@ def tick(state, client, log=print):
         "time_to_full_text": full_text,
         "empty_attrs": {
             "до_часу": model.fmt_clock(now_local, empty_min),
-            "режим": "резерв (мережа є, батарея на поличці)" if standby else (
-                "розряд до полички (мережа є)" if live["grid_on"] else "відключення: розряд до вимкнення"),
+            "режим": ("резерв (мережа є, батарея на поличці)" if (dep["reached"] and (dep["minutes"] or 0) <= 5)
+                      else "економія: розряд до полички, показую резерв") if live["grid_on"]
+                     else "відключення: розряд до вимкнення",
             "причина_порогу": dep_show["label"],
             "поріг_досягнуто_в_моделі": dep_show["reached"],
             "резерв_без_мережі_хв": dep_off["minutes"],
+            "до_полички_хв": dep["minutes"] if live["grid_on"] else None,
+            "поличка_причина": dep["label"] if live["grid_on"] else None,
             "відключення_дтек": ("%s–%s" % (block[0].strftime("%d.%m %H:%M"), block[1].strftime("%H:%M"))) if block else None,
             "навантаження_зараз_вт": round(live["load_w"], 1),
             "навантаження_ema_вт": round(ema, 1),
