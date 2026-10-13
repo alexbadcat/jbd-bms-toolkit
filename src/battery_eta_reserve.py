@@ -114,6 +114,27 @@ def alarm_hours(changes, now, window_h=24.0):
     return total
 
 
+def unscheduled_minutes(off_periods, blocks, now, tolerance_min=30):
+    """Хвилини БЕЗ світла поза графіковими вікнами (±tolerance_min на запізнення/ранній старт).
+    off_periods: [(start, end|None)] — None = триває; blocks: [(start, end)] вікон ДТЕК.
+    Графікове відключення — очікувана подія (вже в плані), тривожне — те, що поза графіком."""
+    tol = timedelta(minutes=tolerance_min)
+    total = 0.0
+    for st, en in off_periods:
+        en = en or now
+        if en <= st:
+            continue
+        # віднімаємо перетини з розширеними вікнами, крок 1 хв (періоди короткі, точність достатня)
+        t = st
+        while t < en:
+            step = min(timedelta(minutes=1), en - t)
+            mid = t + step / 2
+            if not any(b0 - tol <= mid < b1 + tol for b0, b1 in blocks):
+                total += step.total_seconds() / 60.0
+            t += step
+    return total
+
+
 def escalate(f_hours, attack_level_h, emergency_on=False, seen_long_today=False, alert_on=False,
              attack_floor_h=12.0, alert_floor_h=8.0, post_attack=False, post_attack_floor_h=14.0,
              outdoor_temp=None, cold_temp=-5.0, cold_floor_h=6.0, frost_temp=-10.0, frost_floor_h=8.0):
@@ -133,7 +154,7 @@ def escalate(f_hours, attack_level_h, emergency_on=False, seen_long_today=False,
     if emergency_on or seen_long_today:
         lvl = min(24.0, max(attack_floor_h, attack_level_h))
         if lvl > h:
-            h, reason = lvl, ("аварійні відключення" if emergency_on else "сьогодні вже довго вимикало")
+            h, reason = lvl, ("аварійні відключення" if emergency_on else "сьогодні вимикало поза графіком")
     if alert_on and alert_floor_h > h:
         h, reason = alert_floor_h, "повітряна тривога"
     return h, reason

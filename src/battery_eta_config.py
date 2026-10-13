@@ -87,7 +87,7 @@ RES_PRIOR_STRENGTH = float(CFG.get("RES_PRIOR_STRENGTH", "8"))  # скільки
 RES_MIN_H = float(CFG.get("RES_MIN_H", "2"))
 RES_MAX_H = float(CFG.get("RES_MAX_H", "24"))
 RES_ATTACK_FLOOR_H = float(CFG.get("RES_ATTACK_FLOOR_H", "12"))
-RES_ALERT_FLOOR_H = float(CFG.get("RES_ALERT_FLOOR_H", "8"))
+RES_ALERT_FLOOR_H = float(CFG.get("RES_ALERT_FLOOR_H", "0"))  # 0 = вимкнено: там, де тривога 5–20 год/добу щодня, «активна тривога» нічого не прогнозує
 RES_DELAY_H = float(CFG.get("RES_DELAY_H", "0.5"))              # запізнення включення після вікна
 RES_WINDOW_MARGIN = float(CFG.get("RES_WINDOW_MARGIN", "1.15"))
 RES_ECO_FLOOR = int(CFG.get("RES_ECO_FLOOR", "20"))
@@ -98,7 +98,7 @@ RES_NIGHT_START_H = int(CFG.get("RES_NIGHT_START_H", "23"))
 RES_NIGHT_END_H = int(CFG.get("RES_NIGHT_END_H", "7"))
 # сутності ескалації (порожньо — не використовувати)
 RES_EMERGENCY_ENTITY = CFG.get("RES_EMERGENCY_ENTITY", "binary_sensor.outage_emergency_unified")
-RES_SEEN_TODAY_ENTITY = CFG.get("RES_SEEN_TODAY_ENTITY", "input_boolean.deye_outage_seen_today")
+RES_SEEN_TODAY_ENTITY = CFG.get("RES_SEEN_TODAY_ENTITY", "")  # лише фолбек без журналу доби
 RES_ALERT_ENTITY = CFG.get("RES_ALERT_ENTITY", "")
 RES_OUTAGE_ENTITIES = CFG.get("RES_OUTAGE_ENTITIES", "binary_sensor.outage_definite_24h,binary_sensor.outage_possible_24h")
 # масована атака: сумарна тривога за RES_ATTACK_WINDOW_H ≥ RES_ATTACK_ALARM_H → запас RES_POST_ATTACK_FLOOR_H.
@@ -113,3 +113,7 @@ RES_COLD_TEMP = float(CFG.get("RES_COLD_TEMP", "-5"))
 RES_COLD_FLOOR_H = float(CFG.get("RES_COLD_FLOOR_H", "6"))
 RES_FROST_TEMP = float(CFG.get("RES_FROST_TEMP", "-10"))
 RES_FROST_FLOOR_H = float(CFG.get("RES_FROST_FLOOR_H", "8"))
+# відключення ПОЗА графіком сьогодні ≥ RES_UNSCHED_MIN хв → ескалація до атакового рівня
+# (графікові — очікувані, вони вже в плані; допуск на запізнення/ранній старт — RES_SCHED_TOLERANCE_MIN)
+RES_UNSCHED_MIN = float(CFG.get("RES_UNSCHED_MIN", "10"))
+RES_SCHED_TOLERANCE_MIN = float(CFG.get("RES_SCHED_TOLERANCE_MIN", "30"))

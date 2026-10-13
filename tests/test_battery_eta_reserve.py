@@ -138,3 +138,15 @@ def test_alarm_hours_ignores_changes_after_now():
     ch = [(now - timedelta(hours=2), "on"), (now - timedelta(hours=1), "off"),
           (now + timedelta(days=3), "on")]                                          # з «майбутнього»
     assert abs(r.alarm_hours(ch, now) - 1.0) < 1e-6
+
+
+def test_unscheduled_minutes_ignores_outage_inside_schedule():
+    blocks = [(datetime(2026, 10, 13, 17), datetime(2026, 10, 13, 21))]
+    now = datetime(2026, 10, 13, 22)
+    # графікове: 17:05–21:20 (запізнення 20 хв у межах допуску 30) → 0
+    assert r.unscheduled_minutes([(datetime(2026, 10, 13, 17, 5), datetime(2026, 10, 13, 21, 20))], blocks, now) == 0
+    # поза графіком: 12:00–12:45 → 45 хв
+    assert abs(r.unscheduled_minutes([(datetime(2026, 10, 13, 12), datetime(2026, 10, 13, 12, 45))], blocks, now) - 45) < 0.01
+    # затягнулось на 1 год після вікна: 21:30..22:00 поза допуском → 30 хв
+    m = r.unscheduled_minutes([(datetime(2026, 10, 13, 17), None)], blocks, now)
+    assert abs(m - 30) < 0.01

@@ -42,7 +42,7 @@ import os
 import sys
 import time
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import paho.mqtt.client as mqtt
 
@@ -165,7 +165,7 @@ def alarm_changes(entity_id, since):
     return out
 
 
-def compute_reserve(states, live, programs, now_local, hourly, ema, efficiency):
+def compute_reserve(states, live, programs, now_local, hourly, ema, efficiency, state=None):
     now_naive = now_local.replace(tzinfo=None)
     rk = reserve.risk_hours(outage_episodes(), now_naive, recent_days=C.RES_RECENT_DAYS,
                             p=C.RES_PERCENTILE, prior_strength=C.RES_PRIOR_STRENGTH,
@@ -181,9 +181,38 @@ def compute_reserve(states, live, programs, now_local, hourly, ema, efficiency):
         temp = float(((states.get(C.RES_WEATHER_ENTITY) or {}).get("attributes") or {}).get("temperature"))
     except (TypeError, ValueError):
         temp = None
+    # журнал доби: періоди без світла і всі вікна ДТЕК, що траплялись (сенсор показує лише майбутні)
+    windows_now = []
+    for eid in [e.strip() for e in C.RES_OUTAGE_ENTITIES.split(",") if e.strip()]:
+        windows_now += ((states.get(eid) or {}).get("attributes") or {}).get("windows") or []
+    unsched = 0.0
+    if state is not None:
+        day0 = now_naive.replace(hour=0, minute=0, second=0, microsecond=0)
+        offs = [[datetime.fromisoformat(a), datetime.fromisoformat(b) if b else None]
+                for a, b in state.get("res_off", [])]
+        seen = {(a, b) for a, b in state.get("res_blocks", [])}
+        if not live["grid_on"]:
+            if not offs or offs[-1][1] is not None:
+                offs.append([now_naive, None])
+        elif offs and offs[-1][1] is None:
+            offs[-1][1] = now_naive
+        offs = [[max(a, day0), b] for a, b in offs if b is None or b > day0]
+        for a, b in outage.all_outage_blocks(windows_now, now_naive):
+            seen.add((a.isoformat(), b.isoformat()))
+        seen = {(a, b) for a, b in seen if datetime.fromisoformat(b) > day0 - timedelta(hours=1)}
+        state["res_off"] = [[a.isoformat(), b.isoformat() if b else None] for a, b in offs]
+        state["res_blocks"] = sorted(seen)
+        unsched = reserve.unscheduled_minutes(
+            [(a, b) for a, b in offs],
+            [(datetime.fromisoformat(a), datetime.fromisoformat(b)) for a, b in seen],
+            now_naive, tolerance_min=C.RES_SCHED_TOLERANCE_MIN)
+    seen_unscheduled = unsched >= C.RES_UNSCHED_MIN
+    if state is None and on(C.RES_SEEN_TODAY_ENTITY):      # без журналу — старий прапорець HA
+        seen_unscheduled = True
+
     risk_h, why = reserve.escalate(
         rk["hours"], rk["attack_level_h"], emergency_on=on(C.RES_EMERGENCY_ENTITY),
-        seen_long_today=on(C.RES_SEEN_TODAY_ENTITY), alert_on=on(C.RES_ALERT_ENTITY),
+        seen_long_today=seen_unscheduled, alert_on=on(C.RES_ALERT_ENTITY),
         attack_floor_h=C.RES_ATTACK_FLOOR_H, alert_floor_h=C.RES_ALERT_FLOOR_H,
         post_attack=alarm_h >= C.RES_ATTACK_ALARM_H, post_attack_floor_h=C.RES_POST_ATTACK_FLOOR_H,
         outdoor_temp=temp, cold_temp=C.RES_COLD_TEMP, cold_floor_h=C.RES_COLD_FLOOR_H,
@@ -206,6 +235,7 @@ def compute_reserve(states, live, programs, now_local, hourly, ema, efficiency):
         "вага_свіжих": rk["weight_recent"],
         "тривога_год_за_%d_год" % int(C.RES_ATTACK_WINDOW_H): round(alarm_h, 1),
         "температура_c": temp,
+        "без_світла_поза_графіком_сьогодні_хв": round(unsched),
         "відключення_в_плані": ["%s–%s" % (a.strftime("%d.%m %H:%M"), b.strftime("%H:%M")) for a, b in blocks],
         "оновлено": now_local.strftime("%d.%m %H:%M"),
     })
@@ -462,7 +492,7 @@ def tick(state, client, log=print):
         },
     }
     try:
-        payload["reserve"] = compute_reserve(states, live, programs, now_local, hourly, ema, efficiency)
+        payload["reserve"] = compute_reserve(states, live, programs, now_local, hourly, ema, efficiency, state)
     except Exception as e:                                       # noqa: BLE001
         log("[reserve] помилка: %s" % e)
         payload["reserve"] = {"current_soc_floor": None, "error": str(e)}
