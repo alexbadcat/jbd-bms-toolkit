@@ -150,3 +150,11 @@ def test_unscheduled_minutes_ignores_outage_inside_schedule():
     # затягнулось на 1 год після вікна: 21:30..22:00 поза допуском → 30 хв
     m = r.unscheduled_minutes([(datetime(2026, 10, 13, 17), None)], blocks, now)
     assert abs(m - 30) < 0.01
+
+
+def test_plan_after_midnight_finds_current_overnight_slot():
+    # регресія 15.10.2026 00:16: слот 23:20–01:00 через північ не знаходився → сенсор unknown →
+    # сторож падав у запасний «екстрений» 100%
+    p = _plan(datetime(2026, 10, 15, 0, 16), [], 6.0)
+    assert p["current_soc_floor"] is not None
+    assert p["current_why"].startswith("нічний")

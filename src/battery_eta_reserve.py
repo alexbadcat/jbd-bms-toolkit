@@ -240,6 +240,10 @@ def plan(now_local, programs, cap_wh, energy_wh, shutdown_soc, outage_blocks, ri
     any_risk = bool(outage_blocks) or risk_h > calm_risk_h
     slots = []
     for idx, st, en in _slot_bounds(programs, now_local):
+        # слот через північ (напр. 23:20–01:00): між 00:00 і його кінцем іде ВЧОРАШНІЙ екземпляр
+        if st > now_local and st - timedelta(days=1) <= now_local < en - timedelta(days=1):
+            st -= timedelta(days=1)
+            en -= timedelta(days=1)
         # слот, що вже йде — від «зараз»; майбутні — від свого початку
         if st <= now_local < en:
             t0 = now_local
