@@ -135,6 +135,23 @@ def unscheduled_minutes(off_periods, blocks, now, tolerance_min=30):
     return total
 
 
+def stabilize(new_slots, prev_slots, min_step=10):
+    """Гістерезис плану: тримаємо попередню поличку слоту, якщо нова відрізняється < min_step %
+    і не змінився прапорець денного дозаряду (інакше план «тремтить» від кожної зміни навантаження —
+    14.10.2026 поличка мінялась 9 разів за день). Підвищення і зміна дозаряду — завжди одразу."""
+    if not prev_slots:
+        return new_slots
+    prev = {s["index"]: s for s in prev_slots}
+    out = []
+    for s in new_slots:
+        p = prev.get(s["index"])
+        # асиметрично: ПІДВИЩЕННЯ (безпека) — одразу; ЗНИЖЕННЯ — лише на ≥ min_step
+        if p and p["grid"] == s["grid"] and 0 < p["soc"] - s["soc"] < min_step:
+            s = dict(s, soc=p["soc"])
+        out.append(s)
+    return out
+
+
 def escalate(f_hours, attack_level_h, emergency_on=False, seen_long_today=False, alert_on=False,
              attack_floor_h=12.0, alert_floor_h=8.0, post_attack=False, post_attack_floor_h=14.0,
              outdoor_temp=None, cold_temp=-5.0, cold_floor_h=6.0, frost_temp=-10.0, frost_floor_h=8.0):
@@ -208,7 +225,7 @@ def next_cheap_start(t, night_start_h=23, night_end_h=7):
 
 def plan(now_local, programs, cap_wh, energy_wh, shutdown_soc, outage_blocks, risk_h, risk_reason,
          hourly_profile, fallback_w, efficiency, delay_h=0.5, window_margin=1.15,
-         eco_floor=20, night_soc_calm=90, calm_risk_h=3.0, topup_lead_h=3.0,
+         eco_floor=20, night_soc_calm=90, calm_risk_h=3.0, topup_lead_h=2.0,
          night_start_h=23, night_end_h=7):
     """План поличок на 6 слотів програми.
     outage_blocks: [(start_local, end_local)] запланованих відключень (ДТЕК), уже злиті.
@@ -226,7 +243,9 @@ def plan(now_local, programs, cap_wh, energy_wh, shutdown_soc, outage_blocks, ri
         sched = 0.0
         why = None
         for b_start, b_end in outage_blocks:
-            if b_end <= t or b_start >= horizon + timedelta(hours=1):
+            # вікно, що стартує в першу годину(и) дешевого тарифу, з'їдає нічний заряд — його
+            # енергію треба мати ще з вечора (16.10.2026: вікно 00:00–08:00)
+            if b_end <= t or b_start > horizon + timedelta(hours=1):
                 continue
             s = max(b_start, t)
             hrs = (b_end - s).total_seconds() / 3600.0 + delay_h
@@ -268,10 +287,20 @@ def plan(now_local, programs, cap_wh, energy_wh, shutdown_soc, outage_blocks, ri
         else:
             soc = 100.0 * (best + shutdown_wh) / cap_wh
             soc = int(min(100, max(eco_floor, math.ceil(soc / 5.0) * 5)))
-            # дорогий денний дозаряд — лише якщо вікно близько, а енергії не вистачає
-            soon = any(b_start - t0 <= timedelta(hours=topup_lead_h) and b_end > t0
-                       for b_start, b_end in outage_blocks)
-            grid = soon and energy_wh < cap_wh * soc / 100.0
+            # Дорогий денний дозаряд — ЛИШЕ на саме графікове вікно (без «ризикового» запасу),
+            # лише в останні topup_lead_h перед його початком і лише якщо воно ще не почалося.
+            # (14.10.2026: дозаряд разом із запасом коштував 9.5 кВт·год × 4.32 грн за день.)
+            grid = False
+            for b_start, b_end in outage_blocks:
+                if not (t0 < b_start <= t0 + timedelta(hours=topup_lead_h)):
+                    continue
+                hrs = (b_end - b_start).total_seconds() / 3600.0 + delay_h
+                w_need = energy_for(b_start, hrs, hourly_profile, fallback_w, efficiency) * window_margin + shutdown_wh
+                if energy_wh < w_need * 0.97:
+                    grid = True
+                    soc = int(min(100, max(eco_floor, math.ceil(100.0 * w_need / cap_wh / 5.0) * 5)))
+                    why = "дозаряд під вікно %s–%s" % (b_start.strftime("%H:%M"), b_end.strftime("%H:%M"))
+                    break
         slots.append({"index": idx, "time": st.strftime("%H:%M"), "soc": soc, "grid": grid, "why": why,
                       "start": st, "end": en})
     slots.sort(key=lambda s: s["index"])
@@ -279,6 +308,7 @@ def plan(now_local, programs, cap_wh, energy_wh, shutdown_soc, outage_blocks, ri
     return {
         "slots": [{k: v for k, v in s.items() if k not in ("start", "end")} for s in slots],
         "current_soc_floor": cur["soc"] if cur else None,
+        "current_index": cur["index"] if cur else None,
         "current_why": cur["why"] if cur else None,
         "risk_hours": round(risk_h, 1),
         "risk_reason": risk_reason,

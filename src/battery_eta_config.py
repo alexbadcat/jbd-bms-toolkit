@@ -93,7 +93,7 @@ RES_WINDOW_MARGIN = float(CFG.get("RES_WINDOW_MARGIN", "1.15"))
 RES_ECO_FLOOR = int(CFG.get("RES_ECO_FLOOR", "20"))
 RES_NIGHT_SOC_CALM = int(CFG.get("RES_NIGHT_SOC_CALM", "90"))
 RES_CALM_RISK_H = float(CFG.get("RES_CALM_RISK_H", "3"))
-RES_TOPUP_LEAD_H = float(CFG.get("RES_TOPUP_LEAD_H", "3"))
+RES_TOPUP_LEAD_H = float(CFG.get("RES_TOPUP_LEAD_H", "2"))
 RES_NIGHT_START_H = int(CFG.get("RES_NIGHT_START_H", "23"))
 RES_NIGHT_END_H = int(CFG.get("RES_NIGHT_END_H", "7"))
 # сутності ескалації (порожньо — не використовувати)
@@ -104,7 +104,8 @@ RES_OUTAGE_ENTITIES = CFG.get("RES_OUTAGE_ENTITIES", "binary_sensor.outage_defin
 # масована атака: сумарна тривога за RES_ATTACK_WINDOW_H ≥ RES_ATTACK_ALARM_H → запас RES_POST_ATTACK_FLOOR_H.
 # ⚠️ Поріг калібрувати під свою громаду: короткі пороги в регіонах із щоденними тривогами горять постійно.
 RES_ALARM_HISTORY_ENTITY = CFG.get("RES_ALARM_HISTORY_ENTITY", "")
-RES_ATTACK_ALARM_H = float(CFG.get("RES_ATTACK_ALARM_H", "14"))  # там, де тривога 5–20 год/добу щодня, 14+ за добу = день масованої атаки
+RES_ATTACK_ALARM_H = float(CFG.get("RES_ATTACK_ALARM_H", "0"))  # 0 = вимкнено: тривога ≠ відключення (дані 30.09–15.10: у дні 14+ год тривоги відключення були графікові, план їх і так враховує); удар по мережі ловлять ГАВ і «поза графіком»
+RES_PLAN_MIN_STEP = int(CFG.get("RES_PLAN_MIN_STEP", "10"))  # гістерезис полички, %
 RES_ATTACK_WINDOW_H = float(CFG.get("RES_ATTACK_WINDOW_H", "24"))
 RES_POST_ATTACK_FLOOR_H = float(CFG.get("RES_POST_ATTACK_FLOOR_H", "14"))
 # погода: атрибут temperature у weather.*; холод/мороз піднімають запас

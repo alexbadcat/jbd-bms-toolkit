@@ -214,7 +214,7 @@ def compute_reserve(states, live, programs, now_local, hourly, ema, efficiency, 
         rk["hours"], rk["attack_level_h"], emergency_on=on(C.RES_EMERGENCY_ENTITY),
         seen_long_today=seen_unscheduled, alert_on=on(C.RES_ALERT_ENTITY),
         attack_floor_h=C.RES_ATTACK_FLOOR_H, alert_floor_h=C.RES_ALERT_FLOOR_H,
-        post_attack=alarm_h >= C.RES_ATTACK_ALARM_H, post_attack_floor_h=C.RES_POST_ATTACK_FLOOR_H,
+        post_attack=C.RES_ATTACK_ALARM_H > 0 and alarm_h >= C.RES_ATTACK_ALARM_H, post_attack_floor_h=C.RES_POST_ATTACK_FLOOR_H,
         outdoor_temp=temp, cold_temp=C.RES_COLD_TEMP, cold_floor_h=C.RES_COLD_FLOOR_H,
         frost_temp=C.RES_FROST_TEMP, frost_floor_h=C.RES_FROST_FLOOR_H)
     windows = []
@@ -229,6 +229,12 @@ def compute_reserve(states, live, programs, now_local, hourly, ema, efficiency, 
                       night_start_h=C.RES_NIGHT_START_H, night_end_h=C.RES_NIGHT_END_H)
     if not pl:
         return {"current_soc_floor": None}
+    if state is not None:                                    # гістерезис — план не «тремтить»
+        pl["slots"] = reserve.stabilize(pl["slots"], state.get("res_prev_slots"), C.RES_PLAN_MIN_STEP)
+        state["res_prev_slots"] = pl["slots"]
+        cur = next((sl for sl in pl["slots"] if sl["index"] == pl.get("current_index")), None)
+        if cur:
+            pl["current_soc_floor"] = cur["soc"]
     pl.update({
         "статистика_свіжих_епізодів": rk["recent_n"], "свіжий_p90_год": rk["recent_p"],
         "минулий_рік_епізодів": rk["last_year_n"], "минулий_рік_p90_год": rk["last_year_p"],

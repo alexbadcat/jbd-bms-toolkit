@@ -158,3 +158,40 @@ def test_plan_after_midnight_finds_current_overnight_slot():
     p = _plan(datetime(2026, 10, 15, 0, 16), [], 6.0)
     assert p["current_soc_floor"] is not None
     assert p["current_why"].startswith("нічний")
+
+
+def test_topup_targets_window_only_not_risk_reserve():
+    # високий ризиковий запас (14 год) НЕ має перетворюватись на дорогий денний дозаряд:
+    # дозаряджаємо лише на саме вікно 17–19 (2.5 год), і лише за ≤2 год до нього
+    now = datetime(2026, 10, 14, 15, 30)
+    blocks = [(datetime(2026, 10, 14, 17), datetime(2026, 10, 14, 19))]
+    p = _plan(now, blocks, 14.0, energy=CAP * 0.15)
+    s13 = next(s for s in p["slots"] if s["time"] == "13:00")
+    assert s13["grid"] is True and s13["why"].startswith("дозаряд під вікно")
+    # 2.5 год × 700 / 0.875 × 1.15 ≈ 2300 + 1700 shutdown ≈ 23.5% → 25, а НЕ 85–100
+    assert s13["soc"] == 25
+
+
+def test_no_topup_when_window_is_far():
+    p = _plan(datetime(2026, 10, 14, 13, 30), [(datetime(2026, 10, 14, 17), datetime(2026, 10, 14, 19))], 3.0,
+              energy=CAP * 0.15)
+    assert not any(s["grid"] for s in p["slots"] if s["time"] in ("07:00", "09:00", "13:00", "17:00"))
+
+
+def test_stabilize_keeps_small_changes_but_passes_big_ones():
+    prev = [{"index": 2, "soc": 60, "grid": False, "why": "a"}, {"index": 3, "soc": 60, "grid": False, "why": "a"},
+            {"index": 4, "soc": 60, "grid": False, "why": "a"}]
+    new = [{"index": 2, "soc": 55, "grid": False, "why": "b"}, {"index": 3, "soc": 65, "grid": False, "why": "b"},
+           {"index": 4, "soc": 45, "grid": False, "why": "b"}]
+    out = {s["index"]: s["soc"] for s in r.stabilize(new, prev, 10)}
+    assert out == {2: 60, 3: 65, 4: 45}        # дрібне зниження тримаємо, підвищення і велике зниження — одразу
+
+
+def test_window_starting_at_midnight_is_reserved_from_evening():
+    now = datetime(2026, 10, 15, 18)
+    blocks = [(datetime(2026, 10, 16, 0), datetime(2026, 10, 16, 8))]
+    p = _plan(now, blocks, 3.0)
+    s17 = next(s for s in p["slots"] if s["time"] == "17:00")
+    assert s17["why"].startswith("відключення 00:00")
+    # 8.5 год × 700 / 0.875 × 1.15 ≈ 7820 + 1700 ≈ 56% → 60
+    assert s17["soc"] == 60
