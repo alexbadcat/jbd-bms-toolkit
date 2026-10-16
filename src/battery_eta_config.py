@@ -111,9 +111,9 @@ RES_POST_ATTACK_FLOOR_H = float(CFG.get("RES_POST_ATTACK_FLOOR_H", "14"))
 # погода: атрибут temperature у weather.*; холод/мороз піднімають запас
 RES_WEATHER_ENTITY = CFG.get("RES_WEATHER_ENTITY", "weather.pogoda_ua")
 RES_COLD_TEMP = float(CFG.get("RES_COLD_TEMP", "-5"))
-RES_COLD_FLOOR_H = float(CFG.get("RES_COLD_FLOOR_H", "6"))
+RES_COLD_FLOOR_H = float(CFG.get("RES_COLD_FLOOR_H", "0"))  # 0 = вимкнено: вплив холоду вже видно через довші вікна ДТЕК і статистику (подвійний облік)
 RES_FROST_TEMP = float(CFG.get("RES_FROST_TEMP", "-10"))
-RES_FROST_FLOOR_H = float(CFG.get("RES_FROST_FLOOR_H", "8"))
+RES_FROST_FLOOR_H = float(CFG.get("RES_FROST_FLOOR_H", "0"))
 # відключення ПОЗА графіком сьогодні ≥ RES_UNSCHED_MIN хв → ескалація до атакового рівня
 # (графікові — очікувані, вони вже в плані; допуск на запізнення/ранній старт — RES_SCHED_TOLERANCE_MIN)
 RES_UNSCHED_MIN = float(CFG.get("RES_UNSCHED_MIN", "10"))
