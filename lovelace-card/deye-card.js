@@ -872,7 +872,9 @@ class DeyeCard extends HTMLElement {
 
   // ── control popups (visionos glass, gree-style float-in) ──
   _svc(domain, service, data) { if (this._hass) this._hass.callService(domain, service, data); }
-  _setSelect(eid, opt) { this._svc('select', 'select_option', { entity_id: eid, option: opt }); }
+  // домен з самої сутності: input_select.* → input_select.select_option, select.* → select.select_option
+  // (HA 2026.10: select.select_option більше НЕ приймає input_select — клік у селекторі режимів тихо падав)
+  _setSelect(eid, opt) { this._svc(eid.split('.')[0], 'select_option', { entity_id: eid, option: opt }); }
   _setNum(eid, val) { this._svc('number', 'set_value', { entity_id: eid, value: val }); }
   _toggle(eid) { this._svc(eid.split('.')[0], 'toggle', { entity_id: eid }); }
   _estate(eid) { const e = this._hass && this._hass.states[eid]; return e ? e.state : null; }
