@@ -458,8 +458,13 @@ class DeyeCard extends HTMLElement {
     const battActive = battCharge || battDischarge;
     // батарея↔будинок: розряд → крапки до будинку; заряд → крапки в батарею
     const flow1 = flow(battActive, battCharge, battCharge ? '#34c759' : battDischarge ? '#ff9f0a' : 'var(--divider-color)', false);
-    // будинок↔мережа: імпорт → крапки до будинку; експорт → у мережу; блекаут → червоний пунктир
-    const flow2 = flow(gridImport || gridExport, gridImport, gridExport ? cHouse : cGrid, !gridOn);
+    // будинок↔мережа: імпорт → крапки до будинку; експорт → у мережу; блекаут → червоний пунктир.
+    // Працює генератор і мережа не імпортує → джерело праворуч = ГЕНЕРАТОР: потік генератор → будинок
+    // (а надлишок далі в батарею по flow1). Інакше при генераторі картка «малювала», що енергія
+    // береться нізвідки й іде лише в батарею (21.10.2026).
+    const genSrc = genOn && !(gridOn && gridImport);
+    const flow2 = genSrc ? flow(true, true, cGen, false)
+      : flow(gridImport || gridExport, gridImport, gridExport ? cHouse : cGrid, !gridOn);
 
     // рядок оцінки часу — ТІЛЬКИ під час заряду/розряду і тільки якщо сенсор віддав число
     const ti = this._timeInfo(battCharge, battDischarge);
@@ -498,8 +503,11 @@ class DeyeCard extends HTMLElement {
           ${flow1}
           ${stat('house', 'home-lightning-bolt', 'будинок', this._fmtW(lp), cHouse)}
           ${flow2}
-          ${stat('grid', gridOn ? 'transmission-tower' : 'transmission-tower-off', gridLbl, gridVal, gridCol)}
-          ${genOn ? stat('gen', 'engine', 'генератор', this._fmtW(genp), cGen) : ''}
+          ${genSrc
+            ? stat('gen', 'engine', 'генератор', this._fmtW(genp), cGen)
+              + (gridOn ? '' : `<span class="mgridoff" title="Мережі нема">${this._ic('transmission-tower-off', 'mi')}</span>`)
+            : stat('grid', gridOn ? 'transmission-tower' : 'transmission-tower-off', gridLbl, gridVal, gridCol)
+              + (genOn ? stat('gen', 'engine', 'генератор', this._fmtW(genp), cGen) : '')}
           ${(() => { const cs = this._critState(); return `<span class="mcrit mcrit-${cs.key}" title="${cs.label}${cs.warn ? ' · ' + this._shelvesWarnTxt() : ''}">${cs.icon}</span>`; })()}
           ${devOk ? '' : `<span class="malert" data-node="inv" title="${this._st('device_state') || ''} / ${this._st('device_alarm') || ''}">${this._ic('alert-circle', 'mi')}</span>`}
         </div>
@@ -1884,6 +1892,8 @@ class DeyeCard extends HTMLElement {
       ha-icon.mi{--mdc-icon-size:13px;width:13px;height:13px;flex:none;}
       .malert{color:#ff3b30;flex:none;cursor:pointer;animation:blink 1.4s steps(42) infinite;}
       .mtime{display:flex;align-items:center;gap:6px;margin-top:9px;padding-top:8px;border-top:1px solid var(--divider-color);font-size:.74rem;cursor:pointer;animation:pcin .3s;}
+      .mgridoff{color:#ff3b30;opacity:.8;display:flex;align-items:center;margin-left:-4px;}
+      .mgridoff ha-icon.mi{--mdc-icon-size:15px;width:15px;height:15px;}
       .mtime .mtl{color:var(--secondary-text-color);font-weight:700;}
       .mtime b{margin-left:auto;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap;}
       @keyframes pcin{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
