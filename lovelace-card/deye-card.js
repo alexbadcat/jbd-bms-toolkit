@@ -861,8 +861,17 @@ class DeyeCard extends HTMLElement {
     this.shadowRoot.querySelectorAll('[data-tab]').forEach(b =>
       b.addEventListener('click', e => { e.stopPropagation(); this._setTab(b.dataset.tab); }));
     // чотирипозиційний селектор режиму в банері — input_select.deye_mode
+    // Після тапу банер міняє текст/висоту → кнопки зсуваються, і повторний тап влучав у сусіда
+    // (20.10.2026: «Критичний», а через 9 с — «Авто» з того ж акаунта). Тому: миттєва підсвітка
+    // обраної кнопки + 2.5 с ігноруємо інші тапи по селектору.
     this.shadowRoot.querySelectorAll('[data-mode]').forEach(b =>
-      b.addEventListener('click', e => { e.stopPropagation(); this._setSelect(this._modeEid(), this._modeMap()[b.dataset.mode]); }));
+      b.addEventListener('click', e => {
+        e.stopPropagation();
+        if (this._modeLockUntil && Date.now() < this._modeLockUntil) return;
+        this._modeLockUntil = Date.now() + 2500;
+        this.shadowRoot.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('on', x === b));
+        this._setSelect(this._modeEid(), this._modeMap()[b.dataset.mode]);
+      }));
     // тап по будь-якому показнику з entity_id → повноекранний графік історії (тільки
     // розгорнутий вигляд; stopPropagation, щоб не зʼїдало клік попапу/контролів на батьку)
     this.shadowRoot.querySelectorAll('[data-hist]').forEach(el => {
