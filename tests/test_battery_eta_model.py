@@ -486,3 +486,23 @@ def test_taper_ratio_accepts_string_keys_after_json_roundtrip():
     import json
     curve = json.loads(json.dumps({90.0: 1.0, 100.0: 0.2}))
     assert abs(m.taper_ratio_at_soc(curve, 95.0) - 0.6) < 1e-9
+
+
+def test_discharge_check_ratio_and_rejects():
+    c = m.discharge_check(200.0, 170.0, 120, 600, 150.0)      # реально 15 А·год/год, прогноз 15
+    assert c["ratio"] == 1.0
+    assert m.discharge_check(200.0, 199.5, 120, 600, 150.0) is None    # майже не розряджалось
+    assert m.discharge_check(200.0, 170.0, 30, 600, 150.0) is None     # закоротке
+    assert m.discharge_check(170.0, 200.0, 120, 600, 150.0) is None    # заряджалось (генератор)
+
+
+def test_update_load_factor_moves_and_clamps():
+    assert abs(m.update_load_factor(1.0, 1.2) - 1.06) < 1e-9
+    k = 1.0
+    for _ in range(50):
+        k = m.update_load_factor(k, 3.0)
+    assert k == 1.4
+
+
+def test_discharge_error_pct_median():
+    assert m.discharge_error_pct([{"ratio": 1.1}, {"ratio": 0.8}, {"ratio": 1.05}]) == 10.0

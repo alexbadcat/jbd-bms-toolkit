@@ -330,6 +330,7 @@ def read_live(states):
     return {
         "grid_on": grid_on, "energy_wh": energy_wh, "cap_wh": cap_wh or 0.0, "avg_v": avg_v,
         "load_w": load_w, "shutdown_soc": shutdown_soc, "max_current_a": max_current, "charge_a": charge_a,
+        "ah_total": (ah1 or 0.0) + (ah2 or 0.0), "nom_ah": (nom1 or 0.0) + (nom2 or 0.0),
         "outage_windows": outage_windows, "outage_on": outage_on,
     }
 
@@ -379,6 +380,10 @@ def tick(state, client, log=print):
     profile = mdl.get("profile") or {"all": None, "weekday_split": False, "weekday": None, "weekend": None,
                                       "n_days": 0, "eff_n_days": 0, "oldest": None}
     hourly = model.profile_for(profile, is_weekend) if profile.get("all") else None
+    # автокорекція: профіль × коефіцієнт, вивчений на реальних відключеннях (самоперевірка розряду)
+    load_k = float(state.get("load_k", 1.0))
+    if hourly:
+        hourly = [(w * load_k if w is not None else None) for w in hourly]
     efficiency = mdl.get("efficiency", 0.92)
     taper = mdl.get("taper") or {}
 
@@ -422,8 +427,27 @@ def tick(state, client, log=print):
     prev_grid = state.get("prev_grid_on")
     if prev_grid is True and live["grid_on"] is False:
         records.append(model.start_forecast_record(now_utc.isoformat(), "empty", dep["minutes"]))
+        nom = live["nom_ah"] or 0.0
+        state["dis_open"] = {"at": now_utc.isoformat(), "ah": live["ah_total"], "pred_min": dep["minutes"],
+                             "usable_ah": live["ah_total"] - nom * live["shutdown_soc"] / 100.0,
+                             "charged": False, "k": load_k}
+    if state.get("dis_open") and live["charge_a"] > 1.0:
+        state["dis_open"]["charged"] = True                      # генератор/заряд — вимір непридатний
     if prev_grid is False and live["grid_on"] is True:
         model.finalize_forecast_records(records, now_utc.isoformat(), "empty")
+        op = state.pop("dis_open", None)
+        if op and not op.get("charged"):
+            mins = (now_utc - datetime.fromisoformat(op["at"])).total_seconds() / 60.0
+            chk = model.discharge_check(op["ah"], live["ah_total"], mins, op["pred_min"], op["usable_ah"])
+            if chk:
+                chk.update(at=op["at"], minutes=round(mins), k_before=round(load_k, 3))
+                load_k = model.update_load_factor(load_k, chk["ratio"])
+                state["load_k"] = load_k
+                chk["k_after"] = round(load_k, 3)
+                state.setdefault("dis_checks", []).append(chk)
+                state["dis_checks"] = state["dis_checks"][-50:]
+                log("[selfcheck] відключення %.0f хв: реально %.1f, прогноз %.1f А·год/год → k=%.3f"
+                    % (mins, chk["real_ah_h"], chk["pred_ah_h"], load_k))
     state["prev_grid_on"] = live["grid_on"]
 
     was_charging = state.get("prev_charging", False)
@@ -491,7 +515,9 @@ def tick(state, client, log=print):
             "модель_найстарша_доба": profile.get("oldest"),
             "модель_навчена": state.get("last_trained"),
             "поділ_будні_вихідні": profile.get("weekday_split"),
-            "самоперевірка_mape_%": mape_empty,
+            "самоперевірка_похибка_розряду_%": model.discharge_error_pct(state.get("dis_checks", [])),
+            "перевірено_відключень": len(state.get("dis_checks", [])),
+            "корекція_навантаження": round(load_k, 3),
         },
         "full_attrs": {
             "до_часу": model.fmt_clock(now_local, full_min),

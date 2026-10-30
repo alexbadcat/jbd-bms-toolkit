@@ -57,7 +57,7 @@ BMS2 = CFG.get("ETA_BMS_PREFIX_2", "batareia_deye_no2_bms")
 # розряду 0 А 01-04.10; старий SOC недораховував ~6 Аг до вирівнювання 05.10 15:55 Київ).
 ETA_STATS_SINCE = CFG.get("ETA_STATS_SINCE", "2026-10-05T12:55:00+00:00")
 ETA_STATS_MAX_DAYS = int(CFG.get("ETA_STATS_MAX_DAYS", "365"))
-ETA_HALF_LIFE_DAYS = float(CFG.get("ETA_HALF_LIFE_DAYS", "45"))
+ETA_HALF_LIFE_DAYS = float(CFG.get("ETA_HALF_LIFE_DAYS", "14"))  # 45 було замало чутливо: споживання росте з похолоданням швидше
 ETA_SEASON_SIGMA_DAYS = float(CFG.get("ETA_SEASON_SIGMA_DAYS", "45"))
 ETA_WEEKDAY_SPLIT_MIN_DAYS = int(CFG.get("ETA_WEEKDAY_SPLIT_MIN_DAYS", "10"))
 ETA_RETRAIN_HOURS = float(CFG.get("ETA_RETRAIN_HOURS", "6"))

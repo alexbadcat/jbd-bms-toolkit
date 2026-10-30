@@ -466,3 +466,40 @@ def compute_mape(records, kind, last_n=20):
 def prune_records(records, keep=200):
     """Необмежено рости не можна — лишаємо останні keep записів (resolved і pending)."""
     return records[-keep:] if len(records) > keep else records
+
+
+# ───────────────────────── самоперевірка розряду + автокорекція навантаження ─────────────────────────
+# Стара самоперевірка (compute_mape) порівнювала прогноз «вистачить на» з ТРИВАЛІСТЮ відключення —
+# це різні величини (світло дають раніше, ніж сяде батарея) → похибки 400–7000 %, сміття.
+# Правильно: порівнювати ШВИДКІСТЬ розряду (А·год/год за BMS) з тією, що закладала модель.
+
+def discharge_check(ah_start, ah_end, minutes, predicted_minutes, usable_ah_start,
+                    min_minutes=45.0, min_ah=1.0):
+    """Співвідношення реальна/прогнозна швидкість розряду за одне відключення або None, якщо
+    вимір непридатний (коротко, заряджалось — генератор, прогнозу нема)."""
+    if not minutes or minutes < min_minutes or not predicted_minutes or predicted_minutes <= 0:
+        return None
+    used = ah_start - ah_end
+    if used < min_ah or usable_ah_start <= 0:
+        return None
+    real = used / (minutes / 60.0)
+    pred = usable_ah_start / (predicted_minutes / 60.0)
+    if pred <= 0:
+        return None
+    return {"real_ah_h": round(real, 2), "pred_ah_h": round(pred, 2), "ratio": round(real / pred, 3)}
+
+
+def update_load_factor(k, ratio, alpha=0.3, lo=0.7, hi=1.4):
+    """Мультиплікативне згладжене оновлення коефіцієнта навантаження: k ← k·(1+α(ratio−1))."""
+    k = (k or 1.0) * (1.0 + alpha * (ratio - 1.0))
+    return max(lo, min(hi, k))
+
+
+def discharge_error_pct(checks, last_n=10):
+    """Медіана |ratio−1|·100 за останні перевірки — чесна похибка швидкості розряду, %."""
+    rs = [abs(c["ratio"] - 1.0) * 100.0 for c in checks[-last_n:] if c and "ratio" in c]
+    if not rs:
+        return None
+    rs.sort()
+    m = len(rs) // 2
+    return round(rs[m] if len(rs) % 2 else (rs[m - 1] + rs[m]) / 2, 1)
