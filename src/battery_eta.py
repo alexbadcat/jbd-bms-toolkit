@@ -493,6 +493,9 @@ def tick(state, client, log=print):
         "time_to_full_text": full_text,
         "empty_attrs": {
             "до_часу": model.fmt_clock(now_local, empty_min),
+            "хвилин": round(empty_min) if empty_min is not None else None,
+            "відключення_кінець": block[1].strftime("%H:%M") if block else None,
+            "відключення_початок": block[0].strftime("%H:%M") if block else None,
             "режим": ("резерв (мережа є, батарея на поличці)" if (dep["reached"] and (dep["minutes"] or 0) <= 5)
                       else "економія: розряд до полички, показую резерв") if live["grid_on"]
                      else "відключення: розряд до вимкнення",

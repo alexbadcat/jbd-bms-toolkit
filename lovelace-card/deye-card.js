@@ -174,7 +174,7 @@ class DeyeCard extends HTMLElement {
       u.m_house = this._fmtW(c.lp);
       u.m_grid = c.gridOn ? this._fmtW(Math.abs(c.gp)) : 'НЕМА';
       if (c.genOn) u.m_gen = this._fmtW(c.genp);
-      if (c.timeShown) u.m_time = c.tSt;
+      this._miniInfo(c.gridOn, c.battCharge).forEach(r => { u['m_' + r.k] = r.txt; });
       this._bmsPfx().forEach((pfx, pi) => {
         const s = this._bms('zariad', pi);
         if (s === null) return;
@@ -257,7 +257,7 @@ class DeyeCard extends HTMLElement {
     // кожні ~30с, і без цього гварда графіки постійно ремонтувались би (втрата обраного
     // діапазону + зайвий рефетч великих 7д-масивів на кожен тік hass)
     const stateSig = (this._tab === 'graphs' || this._tab === 'outage') ? '' : [
-      c.battCharge, c.battDischarge, c.gridOn, c.gridImport, c.gridExport, c.genOn, c.devOk, c.online, c.socCol, c.timeShown, c.tLbl, c.bst,
+      c.battCharge, c.battDischarge, c.gridOn, c.gridImport, c.gridExport, c.genOn, c.devOk, c.online, c.socCol, c.timeShown, c.tLbl, c.bst, this._miniInfo(c.gridOn, c.battCharge).map(r => r.k + r.col + r.icon).join('|'),
       this._st('work_mode', 'select'), this._st('energy_pattern', 'select'),
       this._st('device_state'), this._st('device_alarm'), this._mode(),
       // банер реального критичного режиму: причини авто-екстреного дня + фактичні полички/струм
@@ -467,14 +467,11 @@ class DeyeCard extends HTMLElement {
       : flow(gridImport || gridExport, gridImport, gridExport ? cHouse : cGrid, !gridOn);
 
     // рядок оцінки часу — ТІЛЬКИ під час заряду/розряду і тільки якщо сенсор віддав число
-    const ti = this._timeInfo(battCharge, battDischarge);
-    const tEid = ti.eid, tSt = ti.text;
-    const timeRow = ti.shown ? `
-      <div class="mtime" data-eid="${tEid}" style="color:${ti.color}">
-        ${this._ic(ti.icon, 'mi')}
-        <span class="mtl">${ti.label}</span>
-        <b data-u="m_time">${tSt}</b>
-      </div>` : '';
+    const timeRow = this._miniInfo(gridOn, battCharge).map(r => `
+      <div class="mtime" data-eid="${this._t2empty}" style="color:${r.col}">
+        ${this._ic(r.icon, 'mi')}
+        <b data-u="m_${r.k}">${r.txt}</b>
+      </div>`).join('');
 
     // рядок обох BMS-паків: SOC + напруга (+струм коли тече) — лише якщо є 2-й пак
     const packs = this._bmsPfx()
@@ -900,6 +897,52 @@ class DeyeCard extends HTMLElement {
   // рядок «час батареї»: заряд → до повного; розряд → скільки лишилось; спокій при мережі —
   // РЕЗЕРВ на випадок відключення (сенсор прогнозу віддає текст «резерв …», коли батарея
   // стоїть на поличці й дім живить мережа). Лейбл — за змістом тексту, а не лише за напрямом.
+  // Міні-плитка (планшети): два рядки — «на скільки й до котрої вистачить» і «що з графіком ДТЕК».
+  // Дані — атрибути сенсора прогнозу battery_eta (хвилин, до_часу, відключення_початок/кінець,
+  // вистачить_до_кінця_відключення_дтек, запас_дефіцит_хв): прогноз уже з автокорекцією навантаження.
+  _hm(min) {
+    if (min == null || isNaN(min)) return '—';
+    min = Math.max(0, Math.round(min));
+    const h = Math.floor(min / 60), m = min % 60;
+    return h ? `${h} год ${m} хв` : `${m} хв`;
+  }
+  _minsUntil(hhmm) {
+    if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return null;
+    const [h, m] = hhmm.split(':').map(Number);
+    const now = new Date(), t = new Date(now);
+    t.setHours(h, m, 0, 0);
+    let d = (t - now) / 60000;
+    if (d < -5) d += 1440;
+    return d;
+  }
+  _miniInfo(gridOn, battCharge) {
+    const e = this._hass && this._hass.states[this._t2empty];
+    const a = (e && e.attributes) || {};
+    const rows = [];
+    const mins = a['хвилин'], until = a['до_часу'];
+    if (battCharge) {
+      const f = this._estate(this._t2full);
+      if (f && /\d/.test(f)) rows.push({ k: 'r1', icon: 'battery-clock', col: '#34c759', txt: `до повного заряду ${f}` });
+    } else if (mins != null) {
+      rows.push({ k: 'r1', icon: gridOn ? 'shield-sun' : 'battery-arrow-down', col: gridOn ? '#5ac8fa' : '#ff9f0a',
+        txt: `${gridOn ? 'без світла вистачить на' : 'вистачить на'} ${this._hm(mins)}${until ? ' · до ' + until : ''}` });
+    }
+    const st = a['відключення_початок'], en = a['відключення_кінець'];
+    const ok = a['вистачить_до_кінця_відключення_дтек'], mar = a['запас_дефіцит_хв'];
+    const margin = mar == null ? '' : (mar >= 0 ? ` · запас +${this._hm(mar)}` : ` · ⚠ не вистачить ~${this._hm(-mar)}`);
+    const bad = mar != null && mar < 0;
+    if (!gridOn) {
+      if (en) rows.push({ k: 'r2', icon: 'lightbulb-on-outline', col: bad ? '#ff3b30' : '#34c759',
+        txt: `світло за графіком о ${en} (через ${this._hm(this._minsUntil(en))})${margin}` });
+      else rows.push({ k: 'r2', icon: 'help-circle-outline', col: 'var(--secondary-text-color)', txt: 'відключення поза графіком — коли дадуть, невідомо' });
+    } else if (st) {
+      rows.push({ k: 'r2', icon: 'timer-sand', col: bad ? '#ff3b30' : 'var(--secondary-text-color)',
+        txt: `відключення ${st}–${en} (через ${this._hm(this._minsUntil(st))})${bad ? margin : ' · вистачить ✓'}` });
+    } else {
+      rows.push({ k: 'r2', icon: 'check-circle-outline', col: 'var(--secondary-text-color)', txt: 'відключень за графіком нема' });
+    }
+    return rows;
+  }
   _timeInfo(battCharge, battDischarge) {
     const emptySt = this._estate(this._t2empty);
     const reserve = !battCharge && emptySt && /^резерв/.test(emptySt);
