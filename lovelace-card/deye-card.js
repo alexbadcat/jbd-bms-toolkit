@@ -138,7 +138,8 @@ class DeyeCard extends HTMLElement {
   _loadW(bp) {
     const gs = this._st('grid_power');
     if (gs === null || gs === 'unavailable' || gs === 'unknown') return this._n('load_power');
-    const est = this._gridW() + this._n('output_l1_power');   // втрати вже в output
+    // генератор заходить окремим портом: без нього при заряді від гена output мінусовий → «0 Вт»
+    const est = this._gridW() + this._n('generator_power') + this._n('output_l1_power');   // втрати вже в output
     return est > 0 ? est : 0;
   }
 
