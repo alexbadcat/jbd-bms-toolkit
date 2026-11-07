@@ -58,7 +58,10 @@ class DeyeCard extends HTMLElement {
         `sensor.${p}_power_losses`, `sensor.${p}_output_l1_power`, `sensor.${p}_external_ct1_power`,
         `binary_sensor.${p}_grid`, `binary_sensor.${p}_generator`, `binary_sensor.${p}_connection`,
       ];
-      this._hass.callService('homeassistant', 'update_entity', { entity_id: ids });
+      // callWS (не callService!) — callService має notifyOnError:true і сам кидає тост
+      // "Не вдалося виконати дію homeassistant/update_entity. unknown error", якщо WS-конекшн
+      // саме перепідключається (напр. resume застосунку з фону) — callWS того не робить.
+      this._hass.callWS({ type: 'call_service', domain: 'homeassistant', service: 'update_entity', service_data: { entity_id: ids.filter(Boolean) } }).catch(() => {});
     }, 5000);
   }
   disconnectedCallback() {
