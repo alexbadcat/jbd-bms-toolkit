@@ -928,17 +928,20 @@ class DeyeCard extends HTMLElement {
       rows.push({ k: 'r1', icon: gridOn ? 'shield-sun' : 'battery-arrow-down', col: gridOn ? '#5ac8fa' : '#ff9f0a',
         txt: `${gridOn ? 'без світла вистачить на' : 'вистачить на'} ${this._hm(mins)}${until ? ' · до ' + until : ''}` });
     }
-    const st = a['відключення_початок'], en = a['відключення_кінець'];
+    const st = a['відключення_початок'], en = a['відключення_кінець'], enMay = a['відключення_кінець_можливо'];
     const ok = a['вистачить_до_кінця_відключення_дтек'], mar = a['запас_дефіцит_хв'];
     const margin = mar == null ? '' : (mar >= 0 ? ` · запас +${this._hm(mar)}` : ` · ⚠ не вистачить ~${this._hm(-mar)}`);
     const bad = mar != null && mar < 0;
     if (!gridOn) {
-      if (en) rows.push({ k: 'r2', icon: 'lightbulb-on-outline', col: bad ? '#ff3b30' : '#34c759',
+      // точний графік закінчується, а далі «можливо» — не обіцяємо світло на межі даних
+      if (en && enMay) rows.push({ k: 'r2', icon: 'lightbulb-question-outline', col: bad ? '#ff3b30' : '#ff9f0a',
+        txt: `світло не раніше ${en}, можливо аж о ${enMay} (через ${this._hm(this._minsUntil(enMay))})${margin}` });
+      else if (en) rows.push({ k: 'r2', icon: 'lightbulb-on-outline', col: bad ? '#ff3b30' : '#34c759',
         txt: `світло за графіком о ${en} (через ${this._hm(this._minsUntil(en))})${margin}` });
       else rows.push({ k: 'r2', icon: 'help-circle-outline', col: 'var(--secondary-text-color)', txt: 'відключення поза графіком — коли дадуть, невідомо' });
     } else if (st) {
       rows.push({ k: 'r2', icon: 'timer-sand', col: bad ? '#ff3b30' : 'var(--secondary-text-color)',
-        txt: `відключення ${st}–${en} (через ${this._hm(this._minsUntil(st))})${bad ? margin : ' · вистачить ✓'}` });
+        txt: `відключення ${st}–${enMay || en}${enMay ? ' (можливо)' : ''} (через ${this._hm(this._minsUntil(st))})${bad ? margin : ' · вистачить ✓'}` });
     } else {
       rows.push({ k: 'r2', icon: 'check-circle-outline', col: 'var(--secondary-text-color)', txt: 'відключень за графіком нема' });
     }

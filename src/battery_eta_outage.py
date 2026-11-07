@@ -78,3 +78,19 @@ def all_outage_blocks(windows_strs, now_local):
         else:
             blocks.append((it["start"], it["end"]))
     return blocks
+
+
+def extend_with_possible(block, possible_strs, now_local):
+    """Кінець блоку, продовженого впритул прилеглими «можливими» вікнами, або кінець самого блоку.
+    Точний графік ДТЕК публікують подобово: факт на сьогодні закінчується о 00:00, а завтра є лише
+    шаблон «можливо». Межа даних о 00:00 — не «світло дадуть о 00:00»; якщо одразу далі стоїть
+    «можливо», чесніше вважати, що відключення, ймовірно, триває (07.11: картка обіцяла світло о 00:00)."""
+    if not block:
+        return None
+    end = block[1]
+    for b_start, b_end in all_outage_blocks(possible_strs, now_local):
+        if b_start <= end < b_end:
+            end = b_end
+        elif b_start > end:
+            break
+    return end

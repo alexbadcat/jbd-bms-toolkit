@@ -327,13 +327,14 @@ def read_live(states):
     outage = states.get("binary_sensor.outage_definite_24h", {})
     outage_windows = (outage.get("attributes", {}) or {}).get("windows")
     outage_on = outage.get("state") == "on"
+    possible_windows = (states.get("binary_sensor.outage_possible_24h", {}).get("attributes", {}) or {}).get("windows")
 
     return {
         "grid_on": grid_on, "energy_wh": energy_wh, "cap_wh": cap_wh or 0.0, "avg_v": avg_v,
         "load_w": load_w, "shutdown_soc": shutdown_soc, "max_current_a": max_current, "charge_a": charge_a,
         "discharge_a": discharge_a,
         "ah_total": (ah1 or 0.0) + (ah2 or 0.0), "nom_ah": (nom1 or 0.0) + (nom2 or 0.0),
-        "outage_windows": outage_windows, "outage_on": outage_on,
+        "outage_windows": outage_windows, "outage_on": outage_on, "possible_windows": possible_windows,
     }
 
 
@@ -487,6 +488,11 @@ def tick(state, client, log=print):
     # і картка писала «вистачить, +45 хв» поряд із «до 04:18» при кінці блоку о 05:00.
     outage_margin = None
     block = outage.next_outage_block(live["outage_windows"], now_local) if live["outage_on"] else None
+    # блок продовжуємо прилеглими «можливими» вікнами — запас рахуємо до кінця всього ланцюжка
+    block_def_end = block[1] if block else None                # кінець за ТОЧНИМ графіком
+    block_end_maybe = outage.extend_with_possible(block, live.get("possible_windows"), now_local)
+    if block and block_end_maybe and block_end_maybe > block[1]:
+        block = (block[0], block_end_maybe)
     if block and dep_off["minutes"] is not None:
         b_start, b_end = block
         need_from = now_local if not live["grid_on"] else max(b_start, now_local)
@@ -515,7 +521,10 @@ def tick(state, client, log=print):
         "empty_attrs": {
             "до_часу": model.fmt_clock(now_local, empty_min),
             "хвилин": round(empty_min) if empty_min is not None else None,
-            "відключення_кінець": block[1].strftime("%H:%M") if block else None,
+            "відключення_кінець": block_def_end.strftime("%H:%M") if block_def_end else None,
+            # «можливо» тягнеться далі за точний кінець — картка пише «не раніше X, можливо до Y»
+            "відключення_кінець_можливо": (block[1].strftime("%H:%M")
+                                           if block and block_def_end and block[1] > block_def_end else None),
             "відключення_початок": block[0].strftime("%H:%M") if block else None,
             "режим": ("резерв (мережа є, батарея на поличці)" if (dep["reached"] and (dep["minutes"] or 0) <= 5)
                       else "економія: розряд до полички, показую резерв") if live["grid_on"]
