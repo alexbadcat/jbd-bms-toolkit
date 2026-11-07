@@ -323,6 +323,7 @@ def read_live(states):
                 have_energy = True
 
     charge_a = max(0.0, i1 or 0.0) + max(0.0, i2 or 0.0)
+    discharge_a = max(0.0, -(i1 or 0.0)) + max(0.0, -(i2 or 0.0))
     outage = states.get("binary_sensor.outage_definite_24h", {})
     outage_windows = (outage.get("attributes", {}) or {}).get("windows")
     outage_on = outage.get("state") == "on"
@@ -330,6 +331,7 @@ def read_live(states):
     return {
         "grid_on": grid_on, "energy_wh": energy_wh, "cap_wh": cap_wh or 0.0, "avg_v": avg_v,
         "load_w": load_w, "shutdown_soc": shutdown_soc, "max_current_a": max_current, "charge_a": charge_a,
+        "discharge_a": discharge_a,
         "ah_total": (ah1 or 0.0) + (ah2 or 0.0), "nom_ah": (nom1 or 0.0) + (nom2 or 0.0),
         "outage_windows": outage_windows, "outage_on": outage_on,
     }
@@ -430,15 +432,30 @@ def tick(state, client, log=print):
         nom = live["nom_ah"] or 0.0
         state["dis_open"] = {"at": now_utc.isoformat(), "ah": live["ah_total"], "pred_min": dep["minutes"],
                              "usable_ah": live["ah_total"] - nom * live["shutdown_soc"] / 100.0,
-                             "charged": False, "k": load_k}
+                             "charged": False, "k": load_k, "ah_int": 0.0, "ts": now_utc.isoformat()}
     if state.get("dis_open") and live["charge_a"] > 1.0:
         state["dis_open"]["charged"] = True                      # генератор/заряд — вимір непридатний
+    # Витрачене рахуємо ІНТЕГРАЛОМ реального струму паків, а не різницею «залишку» BMS: унизу JBD
+    # підправляє лічильник за напругою і «притримує» SOC (07.11: 03–04 год BMS списала 3.7 Аг при
+    # реальних ~12 А) — різниця залишку занижувала витрату, і самоперевірка хибно знижувала k.
+    op_live = state.get("dis_open")
+    if op_live and not live["grid_on"] and "ah_int" in op_live:
+        try:
+            dt_h = (now_utc - datetime.fromisoformat(op_live["ts"])).total_seconds() / 3600.0
+        except (KeyError, ValueError):
+            dt_h = 0.0
+        if 0.0 < dt_h < 0.25:                                    # пропуски >15 хв не вигадуємо
+            op_live["ah_int"] += live["discharge_a"] * dt_h
+        op_live["ts"] = now_utc.isoformat()
     if prev_grid is False and live["grid_on"] is True:
         model.finalize_forecast_records(records, now_utc.isoformat(), "empty")
         op = state.pop("dis_open", None)
         if op and not op.get("charged"):
             mins = (now_utc - datetime.fromisoformat(op["at"])).total_seconds() / 60.0
-            chk = model.discharge_check(op["ah"], live["ah_total"], mins, op["pred_min"], op["usable_ah"])
+            ah_end = live["ah_total"]
+            if op.get("ah_int", 0.0) >= 1.0:                     # інтеграл струму надійніший за BMS
+                ah_end = op["ah"] - op["ah_int"]
+            chk = model.discharge_check(op["ah"], ah_end, mins, op["pred_min"], op["usable_ah"])
             if chk:
                 chk.update(at=op["at"], minutes=round(mins), k_before=round(load_k, 3))
                 load_k = model.update_load_factor(load_k, chk["ratio"])
@@ -465,11 +482,15 @@ def tick(state, client, log=print):
     # ── запас/дефіцит до кінця запланованого (DTEK) вікна відключення ──
     # Рахуємо від резерву БЕЗ мережі: якщо відключення вже йде — до кінця блоку, якщо попереду —
     # на всю тривалість блоку (батарея до його початку не розряджається нижче полички).
+    # Світла вже нема — батарея сідає ВІД ЗАРАЗ, навіть якщо блок графіка ще не почався
+    # (позапланове відключення перед блоком): інакше запас завищувався на години до старту блоку
+    # і картка писала «вистачить, +45 хв» поряд із «до 04:18» при кінці блоку о 05:00.
     outage_margin = None
     block = outage.next_outage_block(live["outage_windows"], now_local) if live["outage_on"] else None
     if block and dep_off["minutes"] is not None:
         b_start, b_end = block
-        need_min = (b_end - max(b_start, now_local)).total_seconds() / 60.0
+        need_from = now_local if not live["grid_on"] else max(b_start, now_local)
+        need_min = (b_end - need_from).total_seconds() / 60.0
         outage_margin = round(dep_off["minutes"] - need_min, 1)
     elif block and dep_off["minutes"] is None:
         outage_margin = 24 * 60.0                              # горизонт 24 год не вичерпано
