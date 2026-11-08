@@ -56,6 +56,7 @@ class DeyeCard extends HTMLElement {
         `sensor.${p}_grid_power`, `sensor.${p}_generator_power`, `sensor.${p}_load_power`,
         // потрібні, щоб перерахувати навантаження, коли дея занулює load_power (див. _loadW)
         `sensor.${p}_power_losses`, `sensor.${p}_output_l1_power`, `sensor.${p}_external_ct1_power`,
+        `sensor.${p}_grid_l1_voltage`, `sensor.${p}_grid_l1_current`,
         `binary_sensor.${p}_grid`, `binary_sensor.${p}_generator`, `binary_sensor.${p}_connection`,
       ];
       // callWS (не callService!) — callService має notifyOnError:true і сам кидає тост
@@ -74,6 +75,10 @@ class DeyeCard extends HTMLElement {
   _eid(suf, dom) { return `${dom || 'sensor'}.${this._pfx}_${suf}`; }
   _st(suf, dom) { const e = this._hass && this._hass.states[this._eid(suf, dom)]; return e ? e.state : null; }
   _n(suf, dom) { const v = parseFloat(this._st(suf, dom)); return isFinite(v) ? v : 0; }
+  // фактична напруга / струм на вводі мережі (міряє сама дея); без мережі — порожньо
+  _gridVTxt(gridOn) { const v = this._n('grid_l1_voltage'); return gridOn && v > 50 ? Math.round(v) + ' В' : ''; }
+  _gridVCol(gridOn) { const v = this._n('grid_l1_voltage'); return !gridOn ? 'var(--secondary-text-color)' : v < 205 ? '#ff3b30' : v < 215 ? '#ff9f0a' : 'var(--secondary-text-color)'; }
+  _invScr(gridOn, devOk) { if (!devOk) return 'ERR'; const a = this._n('grid_l1_current'); return gridOn ? a.toFixed(1) + 'A' : '5.0kW'; }
   _on(suf) { return this._st(suf, 'binary_sensor') === 'on'; }
 
   // ── ЗВІДКИ БЕРЕМО ЦИФРИ (переглянуто 2026-09-16) ───────────────────────
@@ -177,6 +182,7 @@ class DeyeCard extends HTMLElement {
       u.m_bstate = c.battCharge ? 'заряд ' + this._fmtW(Math.abs(c.bp)) : c.battDischarge ? 'розряд ' + this._fmtW(c.bp) : 'спокій';
       u.m_house = this._fmtW(c.lp);
       u.m_grid = c.gridOn ? this._fmtW(Math.abs(c.gp)) : 'НЕМА';
+      u.m_gridv = this._gridVTxt(c.gridOn);
       if (c.genOn) u.m_gen = this._fmtW(c.genp);
       this._miniInfo(c.gridOn, c.battCharge).forEach(r => { u['m_' + r.k] = r.txt; });
       this._bmsPfx().forEach((pfx, pi) => {
@@ -191,6 +197,8 @@ class DeyeCard extends HTMLElement {
       u.soc_txt = String(Math.round(c.soc));
       u.grid_v = c.gridImport ? '↓ ' + this._fmtW(Math.abs(c.gp)) : c.gridExport ? '↑ ' + this._fmtW(Math.abs(c.gp)) : (c.gridOn ? '0 Вт' : 'нема');
       u.gen_v = c.genOn ? this._fmtW(c.genp) : 'вимк';
+      u.grid_sub = this._gridVTxt(c.gridOn);
+      u.inv_scr = this._invScr(c.gridOn, c.devOk);
       u.house_v = this._fmtW(c.lp);
       u.pill_batt_l = `Батарея · ${Math.round(c.soc)}%`;
       u.pill_batt_v = (c.battCharge ? '+ ' : c.battDischarge ? '− ' : '') + this._fmtW(Math.abs(c.bp));
@@ -351,6 +359,7 @@ class DeyeCard extends HTMLElement {
   }
 
   // realistic-ish Deye SUN-5K body
+  _gridOnNow() { return this._st('grid', 'binary_sensor') == null ? true : this._on('grid'); }
   _inverter(g, online, devOk) {
     const x = g.cx - g.hw, y = g.cy - g.hh, w = g.hw * 2, h = g.hh * 2;
     const led = (i, on, c) => `<circle cx="${x + 12 + i * 9}" cy="${y + h - 13}" r="2.5" fill="${on ? c : '#3a4150'}" ${on ? `class="ledon"` : ''}/>`;
@@ -358,7 +367,7 @@ class DeyeCard extends HTMLElement {
       <g class="inv ${online ? '' : 'dim'}" data-node="inv" style="cursor:pointer">
         <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="9" fill="url(#invbody)" stroke="#9aa3af" stroke-width="1.2"/>
         <rect x="${x + 6}" y="${y + 7}" width="${w - 12}" height="22" rx="4" fill="#0d1117" stroke="#2b313c" stroke-width="1"/>
-        <text x="${g.cx}" y="${y + 21}" text-anchor="middle" font-size="9" font-weight="700" fill="${devOk ? '#36d07a' : '#ff6b6b'}" font-family="monospace">${devOk ? '5.0kW' : 'ERR'}</text>
+        <text x="${g.cx}" y="${y + 21}" text-anchor="middle" font-size="9" font-weight="700" fill="${devOk ? '#36d07a' : '#ff6b6b'}" font-family="monospace" data-u="inv_scr">${this._invScr(this._gridOnNow(), devOk)}</text>
         <text x="${g.cx}" y="${y + 40}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#5b6472" letter-spacing="1">DEYE</text>
         <g>${led(0, online, '#36d07a')}${led(1, devOk, '#36d07a')}${led(2, !devOk, '#ffb020')}</g>
         ${[0, 1, 2, 3, 4].map(i => `<rect x="${x + 8}" y="${y + h - 30 + i * 3.2}" width="${w - 16}" height="1.4" rx="0.7" fill="#aab2bd" opacity=".7"/>`).join('')}
@@ -386,10 +395,10 @@ class DeyeCard extends HTMLElement {
   }
 
   // labelled node (grid / generator / house); підписи над колом СТЕКОМ вище кола — не налазять
-  _node(g, key, icon, label, value, color, active, eid) {
+  _node(g, key, icon, label, value, color, active, eid, sub, subCol) {
     const [nx, ny] = g.nodes[key];
     const below = ny >= 150;
-    const ly = below ? ny + g.R + 12 : ny - g.R - 18;
+    const ly = below ? ny + g.R + 12 : ny - g.R - 18 - (sub !== undefined ? 11 : 0);
     const vy = ly + 11;
     return `
       <g class="node ${active ? 'act' : ''}" data-node="${key}" style="cursor:pointer">
@@ -397,6 +406,7 @@ class DeyeCard extends HTMLElement {
         ${this._svgIcon(icon, nx, ny, color)}
         <text x="${nx}" y="${ly}" text-anchor="middle" font-size="9" font-weight="700" fill="var(--secondary-text-color)">${label}</text>
         <text x="${nx}" y="${vy}" text-anchor="middle" font-size="10" font-weight="800" fill="${active ? color : 'var(--secondary-text-color)'}" data-u="${key}_v"${this._h(eid)}>${value}</text>
+        ${sub !== undefined ? `<text x="${nx}" y="${vy + 11}" text-anchor="middle" font-size="9" font-weight="700" fill="${subCol || 'var(--secondary-text-color)'}" data-u="${key}_sub">${sub}</text>` : ''}
       </g>`;
   }
   // ha-icon doesn't render inside <svg>; use a foreignObject so mdi shows on the node
@@ -507,7 +517,7 @@ class DeyeCard extends HTMLElement {
           ${genSrc
             ? stat('gen', 'engine', 'генератор', this._fmtW(genp), cGen)
               + (gridOn ? '' : `<span class="mgridoff" title="Мережі нема">${this._ic('transmission-tower-off', 'mi')}</span>`)
-            : stat('grid', gridOn ? 'transmission-tower' : 'transmission-tower-off', gridLbl, gridVal, gridCol)
+            : stat('grid', gridOn ? 'transmission-tower' : 'transmission-tower-off', gridLbl + `<span class="mgv" style="color:${this._gridVCol(gridOn)}" data-u="m_gridv">${this._gridVTxt(gridOn)}</span>`, gridVal, gridCol)
               + (genOn ? stat('gen', 'engine', 'генератор', this._fmtW(genp), cGen) : '')}
           ${(() => { const cs = this._critState(); return `<span class="mcrit mcrit-${cs.key}" title="${cs.label}${cs.warn ? ' · ' + this._shelvesWarnTxt() : ''}">${cs.icon}</span>`; })()}
           ${devOk ? '' : `<span class="malert" data-node="inv" title="${this._st('device_state') || ''} / ${this._st('device_alarm') || ''}">${this._ic('alert-circle', 'mi')}</span>`}
@@ -603,7 +613,7 @@ class DeyeCard extends HTMLElement {
           </linearGradient>
         </defs>
         ${flows}
-        ${this._node(g, 'grid', gridOn ? 'transmission-tower' : 'transmission-tower-off', 'Мережа', gridVal, cGrid, gridImport || gridExport, this._eid('grid_power'))}
+        ${this._node(g, 'grid', gridOn ? 'transmission-tower' : 'transmission-tower-off', 'Мережа', gridVal, cGrid, gridImport || gridExport, this._eid('grid_power'), this._gridVTxt(gridOn), this._gridVCol(gridOn))}
         ${this._node(g, 'gen', 'engine', 'Генератор', genVal, cGen, genOn, this._eid('generator_power'))}
         ${this._node(g, 'house', 'home', 'Будинок', houseVal, cHouse, lp > TH, this._eid('load_power'))}
         ${this._battery(g, soc, battCharge)}
@@ -1912,6 +1922,7 @@ class DeyeCard extends HTMLElement {
       .mstat:active{transform:scale(.95);}
       .msv{font-size:.98rem;font-weight:800;white-space:nowrap;font-variant-numeric:tabular-nums;}
       .msl{display:inline-flex;align-items:center;gap:4px;font-size:.64rem;font-weight:700;color:var(--secondary-text-color);white-space:nowrap;}
+      .mgv{margin-left:3px;font-weight:800;}
       /* лінії-потоки міні-схеми */
       /* contain:paint — перемальовка замкнена в межах лінії (22×12px), а не всієї картки:
          без цього кожен кадр анімації інвалідовував великий регіон і на слабкому GPU
